@@ -14,7 +14,6 @@ import {
   Volume2,
   Search,
   Image as ImageIcon,
-  Brain, // 新增图标
 } from "lucide-react";
 import { useUnread } from "@/context/UnreadContext";
 
@@ -167,7 +166,6 @@ export default function ChatInfoPage({ params }: PageProps) {
   // --- 辅助组件：菜单项 ---
   const MenuItem = ({
     label,
-    icon,
     type = "arrow",
     value = false,
     onClick,
@@ -178,10 +176,7 @@ export default function ChatInfoPage({ params }: PageProps) {
       onClick={onClick}
       className={`flex items-center justify-between px-4 py-3.5 bg-white active:bg-gray-50 border-b border-gray-100 last:border-none cursor-pointer ${className}`}
     >
-      <div className="flex items-center gap-3">
-        {icon && <div className="text-gray-500">{icon}</div>}
-        <span className="text-base text-gray-900">{label}</span>
-      </div>
+      <span className="text-base text-gray-900">{label}</span>
       <div className="flex items-center gap-2">
         {subText && <span className="text-sm text-gray-400">{subText}</span>}
         {type === "arrow" && <ChevronRight className="w-5 h-5 text-gray-300" />}
@@ -342,7 +337,7 @@ export default function ChatInfoPage({ params }: PageProps) {
         <h1 className="text-lg font-medium ml-1">聊天信息 ({contact.name})</h1>
       </header>
 
-      <div className="flex-1 overflow-y-auto pb-10">
+      <div className="flex-1 overflow-y-auto">
         {/* 头像 */}
         <div className="bg-white p-4 mb-2 flex items-center gap-4">
           <div className="flex flex-col items-center gap-1">
@@ -363,13 +358,12 @@ export default function ChatInfoPage({ params }: PageProps) {
           </div>
         </div>
 
-        {/* 菜单组 1: 搜索与记忆 */}
+        {/* 菜单组 1: 搜索 */}
         <div className="mb-2">
           <MenuItem label="查找聊天记录" onClick={() => setIsSearching(true)} />
-          {/* ✅ 核心添加：记忆管理 */}
+          {/* ✅ 新增：记忆管理入口 */}
           <MenuItem
-            label="记忆管理"
-            icon={<Brain className="w-5 h-5" />}
+            label="记忆总结"
             onClick={() => router.push(`/chat/${id}/info/memory`)}
           />
         </div>
@@ -447,7 +441,6 @@ export default function ChatInfoPage({ params }: PageProps) {
           <MenuItem
             label="清空聊天记录"
             type="none"
-            className="text-red-500 text-center justify-center"
             onClick={handleClearHistory}
           />
         </div>

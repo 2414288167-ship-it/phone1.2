@@ -2,27 +2,27 @@ import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 
-// 引入你的所有 Provider 和根布局组件
+// 引入你的 Provider 和 Layout
 import { UnreadProvider } from "@/context/UnreadContext";
 import { AIProvider } from "@/context/AIContext";
-import { MusicProvider } from "@/context/MusicContext"; // 确保路径正确
-import ClientLayout from "@/components/ClientLayout"; // 确保路径正确
+import { MusicProvider } from "@/context/MusicContext"; // [新增] 导入 Music Provider
+import ClientLayout from "@/components/ClientLayout";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 
 const inter = Inter({ subsets: ["latin"] });
 
-// 视口设置，禁止用户缩放，保持不变
+// 1. 这一步很重要：禁止用户缩放，锁定视口
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  userScalable: false,
+  userScalable: false, // 禁止双指缩放
   viewportFit: "cover",
 };
 
 export const metadata: Metadata = {
   title: "AI Chat App",
-  description: "Your AI Chat Companion",
+  description: "Chat App",
   manifest: "/manifest.json",
 };
 
@@ -33,29 +33,27 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
+      {/* 2. 在 body 上直接加这些类名 */}
       <body className={`${inter.className} antialiased bg-black`}>
         <ServiceWorkerRegister />
 
-        {/* 强制全屏容器 */}
+        {/* 3. 【核心代码】创建一个强制全屏的容器 */}
+        {/* h-[100dvh] = 自动适配浏览器的高度（包括地址栏） */}
+        {/* overflow-hidden = 禁止整个页面上下晃动 */}
         <div className="flex justify-center w-full h-[100dvh] overflow-hidden bg-[#050a1f]">
-          {/* 限制最大宽度 */}
+          {/* 4. 限制最大宽度，保证在电脑上看也是手机形状，在手机上看则是全屏 */}
           <div className="w-full max-w-[500px] h-full flex flex-col relative shadow-2xl">
-            {/* 
-              🔥🔥🔥 核心修复：正确的嵌套顺序 🔥🔥🔥
-              1. 先把所有的数据提供者 (Provider) 从外到内包好。
-              2. 然后把 ClientLayout 放在最内层，因为它需要使用这些数据。
-              3. 最后，把 {children} (你的页面内容) 只放一次，放在 ClientLayout 内部。
-            */}
-            <UnreadProvider>
-              <AIProvider>
-                <MusicProvider>
+            {/* [修改] 用 MusicPlayerProvider 包裹住现有的 Provider */}
+            <MusicProvider>
+              <UnreadProvider>
+                <AIProvider>
                   <ClientLayout>
-                    {/* 👇 你的所有页面内容都将在这里渲染，并且只渲染一次 */}
+                    {/* 这里面的内容如果长，它自己会滚动，不会带着整个页面滚 */}
                     {children}
                   </ClientLayout>
-                </MusicProvider>
-              </AIProvider>
-            </UnreadProvider>
+                </AIProvider>
+              </UnreadProvider>
+            </MusicProvider>
           </div>
         </div>
       </body>

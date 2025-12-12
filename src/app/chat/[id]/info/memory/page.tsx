@@ -12,7 +12,7 @@ import {
   ChevronUp,
   FileText,
   Sparkles,
-  Loader2,
+  Loader2, // 新增：加载图标
 } from "lucide-react";
 
 interface PageProps {
@@ -124,6 +124,7 @@ export default function MemoryPage({ params }: PageProps) {
   const [autoSummary, setAutoSummary] = useState(false);
   const [summaryThreshold, setSummaryThreshold] = useState(50);
   const [customSummaryPrompt, setCustomSummaryPrompt] = useState("");
+  // 🔥 新增：生成状态 loading
   const [isGenerating, setIsGenerating] = useState(false);
 
   // 3. 生理周期
@@ -259,7 +260,7 @@ export default function MemoryPage({ params }: PageProps) {
     return daysSet;
   };
 
-  // --- 记忆分组操作函数 (确保这些都在组件内部) ---
+  // --- 记忆分组操作 ---
   const toggleGroup = (groupId: string) => {
     const newSet = new Set(expandedGroupIds);
     if (newSet.has(groupId)) newSet.delete(groupId);
@@ -314,7 +315,6 @@ export default function MemoryPage({ params }: PageProps) {
     }
   };
 
-  // 🔥 找回了之前可能丢失的 deleteItemFromGroup 函数
   const deleteItemFromGroup = (groupId: string, itemId: string) => {
     if (confirm("删除这条记忆？")) {
       const newGroups = memoryGroups.map((g) => {
@@ -330,7 +330,7 @@ export default function MemoryPage({ params }: PageProps) {
       saveData({ permanentMemory: newGroups });
     }
   };
-  // 🔥🔥🔥 核心修复：精准适配你的 SettingsPage 设置 🔥🔥🔥
+
   // 🔥🔥🔥 核心修复：绕过后端，前端直连代理 (Bypass Backend) 🔥🔥🔥
   const handleManualSummarize = async () => {
     if (isGenerating) return;
@@ -494,8 +494,10 @@ export default function MemoryPage({ params }: PageProps) {
     }
   };
 
+  // 🔥🔥🔥 跳转到世界书前情概要 🔥🔥🔥
   const handleViewHistory = () => {
     if (contact && contact.worldBook) {
+      // 构造目标 URL：携带分类 ID 和 书籍 ID
       const summaryBookId = `${contact.worldBook}_summary_auto`;
       router.push(`/notes?catId=${contact.worldBook}&bookId=${summaryBookId}`);
     } else {

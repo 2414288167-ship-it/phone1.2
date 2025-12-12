@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-// ⬇️⬇️⬇️ 核心技术：使用 Node.js 原生 createRequire
-// 这能像在纯 Node 环境一样加载库，绝对不会出错
-import { createRequire } from "module";
 
-const require = createRequire(import.meta.url);
-// 动态加载库
-const NeteaseCloudMusicApi = require("netease-cloud-music-api");
+// 1. 强制动态模式
+export const dynamic = "force-dynamic";
 
 interface MusicRequestBody {
   action: string;
@@ -40,12 +36,15 @@ async function handleNeteaseRequest(
 
 export async function POST(req: NextRequest) {
   try {
+    // 2. 动态导入整个库
+    // @ts-ignore
+    const NeteaseCloudMusicApi = await import("NeteaseCloudMusicApi");
+
     const body: MusicRequestBody = await req.json();
     const { action, ...params } = body;
     const cookie = params.cookie || "";
 
-    // 从库中解构我们需要的方法
-    // 只要第一步安装正确，这些方法 100% 会存在
+    // 从动态加载的库中解构
     const {
       cloudsearch,
       song_url,
@@ -56,19 +55,7 @@ export async function POST(req: NextRequest) {
       user_playlist,
     } = NeteaseCloudMusicApi;
 
-    // 🔴 调试日志：再次打印 Keys，确认这次是对的
-    // 正确的输出应该包含：cloudsearch, login_qr_key 等下划线命名的函数
     console.log(`[API Check] Action: ${action}`);
-    if (action === "qr_key" && !login_qr_key) {
-      console.error(
-        "❌ 严重错误：库加载成功，但函数名不对！当前库包含:",
-        Object.keys(NeteaseCloudMusicApi).slice(0, 10)
-      );
-      return NextResponse.json(
-        { code: 500, msg: "Library Mismatch" },
-        { status: 500 }
-      );
-    }
 
     let result;
 

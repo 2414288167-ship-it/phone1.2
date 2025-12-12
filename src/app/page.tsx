@@ -329,7 +329,7 @@ export default function HomePage() {
                 className="flex flex-col items-center gap-1 group"
               >
                 <div className="w-[3.5rem] h-[3.5rem] rounded-2xl flex items-center justify-center shadow-md transition-transform group-active:scale-95 relative overflow-hidden p-1">
-                  {/* 👇👇👇 在这里修改世界书图标路径 👇👇👇 */}
+                  {/* 👇👇👇 在这里修改预设图标路径 👇👇👇 */}
                   <img
                     src="\icons\橘猫.png"
                     className="w-full h-full object-contain"
@@ -337,7 +337,7 @@ export default function HomePage() {
                   />
                 </div>
                 <span className="text-xs text-white font-medium drop-shadow-md">
-                  世界书
+                  预设
                 </span>
               </Link>
             </div>
