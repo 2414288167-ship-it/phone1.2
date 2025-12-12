@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -14,8 +14,8 @@ import {
   CalendarDays,
   List,
   Share2,
-  X, // 🔥 新增关闭图标
-  User, // 🔥 新增默认头像图标
+  X,
+  User,
 } from "lucide-react";
 
 // --- 类型定义 ---
@@ -31,7 +31,6 @@ interface Task {
   completedAt?: number;
 }
 
-// 🔥 新增联系人接口
 interface Contact {
   id: string;
   name: string;
@@ -95,18 +94,14 @@ const TYPE_CONFIG = {
   },
 };
 
-// 关键修复：标记为动态路由，解决 useSearchParams 预渲染报错
-export const dynamic = "force-dynamic";
-
-export default function FocusPage() {
+// 核心修改：提取依赖 useSearchParams 的逻辑到子组件
+const FocusContent = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   // --- 状态 ---
   const [activeTab, setActiveTab] = useState<TabType>("timer");
   const [tasks, setTasks] = useState<Task[]>([]);
-
-  // 🔥 新增：分享备注文字状态
   const [shareNote, setShareNote] = useState("");
 
   // 计时器设置
@@ -132,8 +127,6 @@ export default function FocusPage() {
   const [newTaskText, setNewTaskText] = useState("");
   const [newTaskType, setNewTaskType] = useState<TaskType>("u-i");
   const [showSettingModal, setShowSettingModal] = useState(false);
-
-  // 🔥 新增：联系人选择弹窗状态
   const [showShareModal, setShowShareModal] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
 
@@ -147,7 +140,6 @@ export default function FocusPage() {
     "nu-ni": tasks.filter((t) => t.type === "nu-ni" && !t.done),
   };
 
-  // 🔥 新增：仅筛选【今天】完成的任务
   const todayFinishedTasks = tasks.filter((t) => {
     if (!t.done || !t.completedAt) return false;
     const taskDate = new Date(t.completedAt).toDateString();
@@ -172,7 +164,6 @@ export default function FocusPage() {
       else setTodaySeconds(0);
     }
 
-    // 🔥 加载联系人列表
     const contactsStr = localStorage.getItem("contacts");
     if (contactsStr) {
       try {
@@ -200,7 +191,7 @@ export default function FocusPage() {
     localStorage.setItem(STORAGE_KEY_TOTAL, String(totalSeconds));
   }, [totalSeconds]);
 
-  // 处理 URL 自动开始参数
+  // 处理 URL 自动开始参数（依赖 searchParams，核心逻辑）
   useEffect(() => {
     const auto = searchParams.get("auto");
     if (auto === "1") {
@@ -298,34 +289,27 @@ export default function FocusPage() {
     return `${m}m`;
   };
 
-  // 🔥 修改：点击分享按钮只打开弹窗
   const handleShareClick = () => {
     setShowShareModal(true);
   };
 
-  // 🔥 新增：确认分享给指定联系人
   const confirmShare = (contactId: string) => {
     const shareData = {
       type: "focus_share",
       totalSeconds: totalSeconds,
       taskName:
-        // 记得这里建议用上次修复后的 todayFinishedTasks
         finishedTasks.length > 0
           ? `完成了 ${finishedTasks.length} 个任务`
           : "进行了深度专注",
       timestamp: Date.now(),
-      remark: shareNote, // 🔥 这里把备注带上！
+      remark: shareNote,
     };
 
-    // 1. 存入待发送数据
     localStorage.setItem("pending_share_message", JSON.stringify(shareData));
-
-    // 2. 跳转到选定的聊天
     router.push(`/chat/${contactId}`);
-
-    // 3. (可选) 清空备注，防止下次打开还在
     setShareNote("");
   };
+
   // --- 任务操作 ---
   const addTask = () => {
     if (!newTaskText.trim()) return;
@@ -348,7 +332,6 @@ export default function FocusPage() {
           return {
             ...t,
             done: isDone,
-            // 🔥如果是标记完成，记录当前时间；如果是取消完成，清空时间
             completedAt: isDone ? Date.now() : undefined,
           };
         }
@@ -361,6 +344,7 @@ export default function FocusPage() {
     setTasks(tasks.filter((t) => t.id !== id));
   };
 
+  // 页面渲染逻辑（原 FocusPage 的 return 内容）
   return (
     <div className="min-h-screen bg-[#FDFCF8] text-slate-700 pb-28 relative overflow-hidden font-sans selection:bg-rose-200">
       {/* 🌈 背景光晕 */}
@@ -644,7 +628,6 @@ export default function FocusPage() {
                   <Check className="w-6 h-6 stroke-[3px]" />
                 </div>
                 <div>
-                  {/* 🔥 修改这里：使用 todayFinishedTasks.length */}
                   <div className="text-2xl font-black text-slate-700">
                     {todayFinishedTasks.length}个
                   </div>
@@ -833,12 +816,10 @@ export default function FocusPage() {
         </div>
       )}
 
-      {/* 🔥 新增：分享联系人选择弹窗 */}
+      {/* 分享联系人选择弹窗 */}
       {showShareModal && (
         <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-sm rounded-[2rem] p-6 shadow-2xl flex flex-col max-h-[80vh]">
-            {" "}
-            {/* 注意 max-h 改稍微大一点 */}
             <div className="flex justify-between items-center mb-4 shrink-0">
               <h3 className="text-xl font-black text-slate-700">
                 分享给谁? 💌
@@ -850,7 +831,6 @@ export default function FocusPage() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            {/* 🔥🔥🔥 新增：备注输入框开始 🔥🔥🔥 */}
             <div className="mb-4 shrink-0">
               <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 focus-within:border-rose-200 focus-within:bg-white focus-within:ring-2 focus-within:ring-rose-100 transition-all">
                 <textarea
@@ -861,10 +841,8 @@ export default function FocusPage() {
                 />
               </div>
             </div>
-            {/* 🔥🔥🔥 新增：备注输入框结束 🔥🔥🔥 */}
             <div className="flex-1 overflow-y-auto space-y-2 pr-1">
               {contacts.length === 0 ? (
-                // ... (保持原有代码不变)
                 <div className="text-center py-10 text-slate-400 text-sm">
                   没有找到联系人...
                 </div>
@@ -875,7 +853,6 @@ export default function FocusPage() {
                     onClick={() => confirmShare(contact.id)}
                     className="flex items-center gap-3 p-3 rounded-2xl hover:bg-slate-50 active:scale-98 transition cursor-pointer border border-transparent hover:border-slate-100 group"
                   >
-                    {/* ... (头像部分保持不变) ... */}
                     <div className="w-12 h-12 rounded-full overflow-hidden bg-slate-200 shrink-0 border border-slate-100">
                       {contact.avatar ? (
                         <img
@@ -898,7 +875,6 @@ export default function FocusPage() {
                       </div>
                     </div>
 
-                    {/* ... (箭头图标保持不变) ... */}
                     <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 group-hover:bg-rose-100 group-hover:text-rose-500 transition-colors">
                       <Share2 className="w-4 h-4" />
                     </div>
@@ -910,5 +886,14 @@ export default function FocusPage() {
         </div>
       )}
     </div>
+  );
+};
+
+// 主页面组件：用 Suspense 包裹依赖 useSearchParams 的 FocusContent
+export default function FocusPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-slate-400">加载中...</div>}>
+      <FocusContent />
+    </Suspense>
   );
 }
