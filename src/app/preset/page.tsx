@@ -196,7 +196,6 @@ function PresetPageContent() {
   };
 
   // --- 渲染：Prompt 编辑页 (Level 3) ---
-  // --- 渲染：Prompt 编辑页 (Level 3) ---
   const renderPromptEditor = () => {
     if (!editingPrompt) return null;
     return (
@@ -218,57 +217,49 @@ function PresetPageContent() {
             保存
           </button>
         </header>
-
-        {/* 修改点 1：外层容器改为 flex flex-col，去掉 overflow-y-auto，防止整体滚动 */}
-        <div className="flex-1 flex flex-col p-4 gap-4 overflow-hidden">
-          {/* 修改点 2：将顶部的“指令名称”和“角色”包裹在一个不伸缩的容器中 */}
-          <div className="shrink-0 space-y-4">
-            <div>
-              <label className="text-xs font-bold text-gray-400 ml-1">
-                指令名称
-              </label>
-              <input
-                value={editingPrompt.name}
-                onChange={(e) =>
-                  setEditingPrompt({ ...editingPrompt, name: e.target.value })
-                }
-                className="w-full mt-1 px-4 py-3 rounded-xl border-none shadow-sm focus:ring-2 ring-blue-500/20"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-bold text-gray-400 ml-1">
-                角色 (Role)
-              </label>
-              <div className="flex gap-2 mt-1">
-                {["system", "user", "assistant"].map((role) => (
-                  <button
-                    key={role}
-                    onClick={() =>
-                      setEditingPrompt({ ...editingPrompt, role: role as any })
-                    }
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      editingPrompt.role === role
-                        ? "bg-blue-500 text-white"
-                        : "bg-white text-gray-600"
-                    }`}
-                  >
-                    {role}
-                  </button>
-                ))}
-              </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div>
+            <label className="text-xs font-bold text-gray-400 ml-1">
+              指令名称
+            </label>
+            <input
+              value={editingPrompt.name}
+              onChange={(e) =>
+                setEditingPrompt({ ...editingPrompt, name: e.target.value })
+              }
+              className="w-full mt-1 px-4 py-3 rounded-xl border-none shadow-sm focus:ring-2 ring-blue-500/20"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-bold text-gray-400 ml-1">
+              角色 (Role)
+            </label>
+            <div className="flex gap-2 mt-1">
+              {["system", "user", "assistant"].map((role) => (
+                <button
+                  key={role}
+                  onClick={() =>
+                    setEditingPrompt({ ...editingPrompt, role: role as any })
+                  }
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    editingPrompt.role === role
+                      ? "bg-blue-500 text-white"
+                      : "bg-white text-gray-600"
+                  }`}
+                >
+                  {role}
+                </button>
+              ))}
             </div>
           </div>
-
-          {/* 修改点 3：让文本域容器 flex-1 自动撑满剩余高度，并去掉 min-h 限制 */}
-          <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex-1 flex flex-col min-h-[300px]">
             <label className="text-xs font-bold text-gray-400 ml-1">内容</label>
             <textarea
               value={editingPrompt.content}
               onChange={(e) =>
                 setEditingPrompt({ ...editingPrompt, content: e.target.value })
               }
-              // 修改点 4：CSS 调整，确保 textarea 本身高度铺满
-              className="w-full flex-1 mt-1 p-4 rounded-xl border-none shadow-sm resize-none font-mono text-sm leading-relaxed focus:ring-2 ring-blue-500/20 focus:outline-none overflow-y-auto"
+              className="w-full h-full mt-1 p-4 rounded-xl border-none shadow-sm resize-none font-mono text-sm leading-relaxed focus:ring-2 ring-blue-500/20"
               placeholder="输入指令内容..."
             />
           </div>

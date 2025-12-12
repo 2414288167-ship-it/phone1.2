@@ -12,6 +12,7 @@ import {
   ChevronUp,
   FileText,
   Sparkles,
+  Loader2,
 } from "lucide-react";
 
 interface PageProps {
@@ -123,6 +124,7 @@ export default function MemoryPage({ params }: PageProps) {
   const [autoSummary, setAutoSummary] = useState(false);
   const [summaryThreshold, setSummaryThreshold] = useState(50);
   const [customSummaryPrompt, setCustomSummaryPrompt] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
 
   // 3. 生理周期
   const [menstrualData, setMenstrualData] = useState({
@@ -257,7 +259,7 @@ export default function MemoryPage({ params }: PageProps) {
     return daysSet;
   };
 
-  // --- 记忆分组操作 ---
+  // --- 记忆分组操作函数 (确保这些都在组件内部) ---
   const toggleGroup = (groupId: string) => {
     const newSet = new Set(expandedGroupIds);
     if (newSet.has(groupId)) newSet.delete(groupId);
@@ -312,6 +314,7 @@ export default function MemoryPage({ params }: PageProps) {
     }
   };
 
+  // 🔥 找回了之前可能丢失的 deleteItemFromGroup 函数
   const deleteItemFromGroup = (groupId: string, itemId: string) => {
     if (confirm("删除这条记忆？")) {
       const newGroups = memoryGroups.map((g) => {
@@ -327,49 +330,172 @@ export default function MemoryPage({ params }: PageProps) {
       saveData({ permanentMemory: newGroups });
     }
   };
+  // 🔥🔥🔥 核心修复：精准适配你的 SettingsPage 设置 🔥🔥🔥
+  // 🔥🔥🔥 核心修复：绕过后端，前端直连代理 (Bypass Backend) 🔥🔥🔥
+  const handleManualSummarize = async () => {
+    if (isGenerating) return;
 
-  // 🔥🔥🔥 核心修改：手动触发/模拟自动总结 🔥🔥🔥
-  const handleManualSummarize = () => {
+    // 1. 基础检查
     if (!contact?.worldBook) {
       alert("该角色未关联世界书，无法生成总结。");
       return;
     }
-    const worldBookId = contact.worldBook;
-    const summaryBookId = `${worldBookId}_summary_auto`; // 👈 必须与导入时一致
 
-    // 1. 获取世界书数据
-    const wbStr = localStorage.getItem("worldbook_data");
-    if (!wbStr) return;
-    const wbData = JSON.parse(wbStr);
+    const msgsStr = localStorage.getItem(`chat_${conversationId}`);
+    if (!msgsStr) {
+      alert("暂无聊天记录，无法生成总结。");
+      return;
+    }
+    const allMessages = JSON.parse(msgsStr);
 
-    // 2. 查找目标条目
-    const bookIndex = wbData.books.findIndex(
-      (b: any) => b.id === summaryBookId
-    );
+    // 过滤并处理消息
+    const recentContext = allMessages
+      .filter((m: any) => m.type === "text" && m.role !== "system")
+      .slice(-50)
+      .map(
+        (m: any) => `${m.role === "user" ? "用户" : contact.name}: ${m.content}`
+      )
+      .join("\n");
 
-    if (bookIndex === -1) {
-      alert("未找到‘前情概要’条目，可能是旧数据或已被删除。");
+    if (!recentContext) {
+      alert("最近没有有效文本对话。");
       return;
     }
 
-    // 3. 模拟生成总结 (实际应调用 LLM)
-    const newSummary = `[${new Date().toLocaleDateString()} 自动总结]\n根据最近的聊天记录，${
-      contact.name
-    } 与用户的关系更进了一步... (此为模拟生成的总结内容)`;
+    const systemPrompt =
+      customSummaryPrompt ||
+      "请总结以下对话的重点剧情，关注人物关系进展和重要事件。";
+    setIsGenerating(true);
 
-    // 4. 更新内容
-    const oldContent = wbData.books[bookIndex].content[0].content;
-    wbData.books[bookIndex].content[0].content =
-      oldContent + "\n\n" + newSummary;
+    try {
+      // 2. 读取配置
+      let apiKey = localStorage.getItem("ai_api_key");
+      let proxyUrl = localStorage.getItem("ai_proxy_url");
+      const model = localStorage.getItem("ai_model") || "gpt-3.5-turbo";
 
-    localStorage.setItem("worldbook_data", JSON.stringify(wbData));
-    alert("已根据当前设定，生成了一段新总结并写入世界书！");
+      // 兜底逻辑
+      if (!apiKey) apiKey = localStorage.getItem("manual_api_key");
+
+      if (!apiKey) {
+        const input = prompt("未检测到 API Key，请手动输入：");
+        if (!input) {
+          setIsGenerating(false);
+          return;
+        }
+        apiKey = input.trim();
+        localStorage.setItem("manual_api_key", apiKey);
+      }
+
+      console.log(
+        `🚀 开始总结 (直连模式) | 模型: ${model} | 代理: ${proxyUrl || "默认"}`
+      );
+
+      // 3. 构造请求地址 (关键步骤)
+      let endpoint = "/api/chat"; // 默认回退
+
+      if (proxyUrl) {
+        // 移除末尾斜杠
+        let baseUrl = proxyUrl.replace(/\/+$/, "");
+
+        // 智能修正 URL: 确保指向 /chat/completions
+        // 如果用户填的是 https://api.openai.com/v1，我们拼成 https://api.openai.com/v1/chat/completions
+        // 如果用户填的是 https://api.openai.com，尝试加 /v1
+        if (baseUrl.endsWith("/chat/completions")) {
+          endpoint = baseUrl;
+        } else if (baseUrl.endsWith("/v1")) {
+          endpoint = `${baseUrl}/chat/completions`;
+        } else {
+          // 大部分反代 (如 OneAPI) 兼容 /v1/chat/completions
+          endpoint = `${baseUrl}/v1/chat/completions`;
+        }
+      }
+
+      console.log("📡 请求目标:", endpoint);
+
+      // 4. 发送请求
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: model, // 使用设置中的模型
+          messages: [
+            { role: "system", content: systemPrompt },
+            {
+              role: "user",
+              content: `以下是最近的对话记录，请进行总结：\n\n${recentContext}`,
+            },
+          ],
+          stream: false,
+          temperature: 0.7,
+        }),
+      });
+
+      if (response.status === 401) {
+        throw new Error(
+          "API Key 无效 (401)。请检查 Key 是否正确，或该模型是否可用。"
+        );
+      }
+
+      if (response.status === 404) {
+        // 如果直连失败 (404)，说明 URL 拼写不对，提示用户
+        throw new Error(
+          `连接代理失败 (404)。请检查设置中的“反代地址”是否正确。\n当前尝试请求: ${endpoint}`
+        );
+      }
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`请求失败: ${response.status} - ${errText}`);
+      }
+
+      const data = await response.json();
+      const aiContent =
+        data.content || data.choices?.[0]?.message?.content || data.text;
+
+      if (!aiContent) throw new Error("AI 返回内容为空");
+
+      // 5. 写入世界书
+      const worldBookId = contact.worldBook;
+      const summaryBookId = `${worldBookId}_summary_auto`;
+      const wbStr = localStorage.getItem("worldbook_data");
+
+      if (wbStr) {
+        const wbData = JSON.parse(wbStr);
+        const bookIndex = wbData.books.findIndex(
+          (b: any) => b.id === summaryBookId
+        );
+
+        if (bookIndex !== -1) {
+          const newEntry = `\n\n[${new Date().toLocaleDateString()} 自动总结]\n${aiContent}`;
+          if (wbData.books[bookIndex].content.length > 0) {
+            wbData.books[bookIndex].content[0].content += newEntry;
+          } else {
+            wbData.books[bookIndex].content.push({
+              id: Date.now().toString(),
+              keys: ["summary"],
+              content: newEntry,
+              enabled: true,
+            });
+          }
+          localStorage.setItem("worldbook_data", JSON.stringify(wbData));
+          alert("✅ 总结成功生成！");
+        } else {
+          alert("⚠️ 生成成功，但未找到总结条目 (summary_auto)，无法保存。");
+        }
+      }
+    } catch (error: any) {
+      console.error(error);
+      alert(`❌ 错误: ${error.message}`);
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
-  // 🔥🔥🔥 核心修改：跳转到世界书前情概要 🔥🔥🔥
   const handleViewHistory = () => {
     if (contact && contact.worldBook) {
-      // 构造目标 URL：携带分类 ID 和 书籍 ID
       const summaryBookId = `${contact.worldBook}_summary_auto`;
       router.push(`/notes?catId=${contact.worldBook}&bookId=${summaryBookId}`);
     } else {
@@ -595,14 +721,27 @@ export default function MemoryPage({ params }: PageProps) {
             />
           </div>
 
-          {/* 🔥 模拟手动触发总结（演示用） */}
+          {/* 🔥 真实 AI 触发总结 */}
           {autoSummary && (
             <div
-              className="px-4 py-3 border-b border-gray-100 flex justify-between items-center active:bg-gray-50 cursor-pointer"
+              className={`px-4 py-3 border-b border-gray-100 flex justify-between items-center transition-colors ${
+                isGenerating
+                  ? "bg-blue-50 cursor-wait"
+                  : "active:bg-gray-50 cursor-pointer"
+              }`}
               onClick={handleManualSummarize}
             >
-              <span className="text-sm text-blue-500">⚡ 立即执行一次总结</span>
-              <Sparkles className="w-4 h-4 text-blue-500" />
+              <span className="text-sm text-blue-500 flex items-center gap-2">
+                {isGenerating ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    正在请求 AI 生成总结...
+                  </>
+                ) : (
+                  <>⚡ 立即执行一次总结</>
+                )}
+              </span>
+              {!isGenerating && <Sparkles className="w-4 h-4 text-blue-500" />}
             </div>
           )}
 
