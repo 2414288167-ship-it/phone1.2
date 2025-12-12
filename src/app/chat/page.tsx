@@ -31,7 +31,13 @@ interface Contact {
   aiName?: string;
   myNickname?: string;
   isPinned?: boolean;
-  description?: string;
+
+  // 🔥🔥🔥 修改 1: 拆分人设与风格，防止 AI 混淆 🔥🔥🔥
+  description?: string; // 纯粹的角色背景、身份、性格
+  stylePreset?: string; // 这里的预设只包含：写作风格、回复格式、系统指令
+  exampleDialogue?: string; // 对话示例 (mes_example)，这对 AI 模仿语气至关重要
+  // 🔥🔥🔥 修改结束 🔥🔥🔥
+
   firstMessage?: string;
   worldBookId?: string;
 }
@@ -58,7 +64,7 @@ interface WorldBookData {
   categories: Category[];
 }
 
-// PNG 解析工具
+// PNG 解析工具 (保持不变)
 const extractPngMetadata = (buffer: ArrayBuffer): string | null => {
   const view = new DataView(buffer);
   if (view.getUint32(0) !== 0x89504e47 || view.getUint32(4) !== 0x0d0a1a0a)
@@ -183,6 +189,8 @@ export default function ChatListPage() {
       aiName: newName,
       myNickname: "我",
       isPinned: false,
+      // 手动创建时，给一个基础的风格预设
+      stylePreset: "请用自然的口语与我对话，不要像个机器人。",
     };
     const updated = [newContact, ...contacts];
     setContacts(sortContacts(updated));
@@ -191,7 +199,6 @@ export default function ChatListPage() {
     router.push(`/chat/${newContact.id}`);
   };
 
-  // 🔥🔥🔥 核心修复：导入逻辑适配 NotesPage 的数据结构 🔥🔥🔥
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -229,13 +236,41 @@ export default function ChatListPage() {
       if (characterData) {
         const charName =
           characterData.name || characterData.char_name || "导入角色";
-        const charDesc =
-          characterData.description || characterData.persona || "";
-        const charScenario = characterData.scenario || "";
+
+        // --- 核心修复：分离数据字段 ---
+
+        // 1. 基础描述 (Identity)
+        const baseDesc = characterData.description || "";
+        const personality = characterData.personality || "";
+        const scenario = characterData.scenario || "";
+
+        // 将身份相关内容合并到 description
+        let finalDescription = baseDesc;
+        if (personality)
+          finalDescription += `\n\n[Personality]: ${personality}`;
+        if (scenario) finalDescription += `\n\n[Scenario]: ${scenario}`;
+
+        // 2. 风格与预设 (Style Preset)
+        // 提取系统指令、越狱指令或风格指导
+        const systemPrompt = characterData.system_prompt || "";
+        const postHistory = characterData.post_history_instructions || "";
+        // 许多酒馆卡把风格写在 "note" 或扩展字段里，这里主要提取 V2 标准字段
+
+        const extractedPreset = [
+          systemPrompt ? `[System Instruction]: ${systemPrompt}` : "",
+          postHistory ? `[Writing Style]: ${postHistory}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+
+        // 3. 对话示例 (Dialogue Examples) - 只要这个混在 description 里，AI 就容易错乱
+        const mesExample =
+          characterData.mes_example || characterData.example_dialogue || "";
+
         const charIntro =
           characterData.first_mes || characterData.greeting || "你好";
 
-        // --- 核心：世界书处理 (转换结构) ---
+        // --- 世界书处理 (保持原有逻辑) ---
         let importedWorldBookId = "";
         const wbData = characterData.character_book || characterData.lorebook;
 
@@ -248,19 +283,14 @@ export default function ChatListPage() {
           if (!existingWB.books) existingWB.books = [];
           if (!existingWB.categories) existingWB.categories = [];
 
-          // 创建新的分类
           const newCategoryId = Date.now();
           const entriesRaw = wbData.entries || wbData.entries_list || [];
-
-          // 兼容 entries 可能是数组也可能是对象
           const entriesArray = Array.isArray(entriesRaw)
             ? entriesRaw
             : Object.values(entriesRaw);
 
-          // 转换条目：从 Tavern 格式 -> NotesPage 格式
           const newBooks: Book[] = entriesArray.map(
             (entry: any, index: number) => {
-              // ... 原有的转换逻辑 ...
               const keys = entry.keys || entry.key || [];
               const finalKeys = Array.isArray(keys)
                 ? keys
@@ -285,28 +315,25 @@ export default function ChatListPage() {
             }
           );
 
-          // 🔥🔥🔥 新增：自动插入一个“前情概要”条目 🔥🔥🔥
           newBooks.unshift({
-            id: `${newCategoryId}_summary_auto`, // 特殊ID，方便后续查找
+            id: `${newCategoryId}_summary_auto`,
             categoryId: newCategoryId,
             name: "前情概要 (自动记录)",
             content: [
               {
-                keys: ["前情概要", "summary", "story so far"], // 触发词
+                keys: ["前情概要", "summary", "story so far"],
                 content: "（暂无记录，当对话达到一定数量时会自动生成）",
                 comment: "系统自动维护，请勿手动改ID",
-                enabled: true, // 默认启用
+                enabled: true,
               },
             ],
           });
-          // 🔥🔥🔥 新增结束 🔥🔥🔥
+
           if (newBooks.length > 0) {
-            // 保存分类
             existingWB.categories.push({
               id: newCategoryId,
               name: `${charName}的世界书 (导入)`,
             });
-            // 保存书籍
             existingWB.books.push(...newBooks);
 
             localStorage.setItem("worldbook_data", JSON.stringify(existingWB));
@@ -317,6 +344,7 @@ export default function ChatListPage() {
           }
         }
 
+        // 🔥🔥🔥 核心：将清洗后的数据存入 Contact 🔥🔥🔥
         const newContact: Contact = {
           id: Date.now().toString(),
           name: charName,
@@ -326,7 +354,12 @@ export default function ChatListPage() {
           aiName: charName,
           myNickname: "我",
           isPinned: false,
-          description: `${charDesc}\n\n[Scenario]: ${charScenario}`,
+
+          // 这里是关键：我们把数据分开放，而不是全塞进 description
+          description: finalDescription,
+          stylePreset: extractedPreset, // 存入独立的风格字段
+          exampleDialogue: mesExample, // 存入独立的示例字段
+
           firstMessage: charIntro,
           worldBookId: importedWorldBookId,
         };
