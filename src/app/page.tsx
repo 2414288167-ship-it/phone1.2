@@ -77,12 +77,60 @@ const ClockWidget = () => {
 };
 
 const ToDoWidget = () => {
-  const items = [
-    { text: "保持好心情 🩵", done: false },
-    { text: "每天喝八杯水 🥛", done: false },
-    { text: "坚持减肥运动 🥎", done: false },
-    { text: "去看海吹泡泡 🫧", done: false },
-  ];
+  // 定义任务接口（要与 focus 页面一致）
+  interface Task {
+    id: string;
+    text: string;
+    done: boolean;
+    type: string;
+  }
+
+  const [items, setItems] = useState<Task[]>([]);
+
+  // 加载任务数据的函数
+  const loadTasks = () => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("my_focus_tasks");
+      if (saved) {
+        setItems(JSON.parse(saved));
+      } else {
+        // 如果没有数据，显示默认数据
+        setItems([
+          {
+            id: "1",
+            text: "去 /focus 添加任务吧 🩵",
+            done: false,
+            type: "nu-i",
+          },
+          { id: "2", text: "保持好心情 ✨", done: false, type: "u-ni" },
+        ]);
+      }
+    }
+  };
+
+  // 处理任务完成/取消完成
+  const toggleDone = (id: string) => {
+    const newItems = items.map((item) =>
+      item.id === id ? { ...item, done: !item.done } : item
+    );
+    setItems(newItems);
+    // 同步回 localStorage
+    localStorage.setItem("my_focus_tasks", JSON.stringify(newItems));
+  };
+
+  useEffect(() => {
+    loadTasks();
+
+    // 监听 storage 事件（跨标签页同步）
+    window.addEventListener("storage", loadTasks);
+    // 监听自定义事件（同页面/路由切换同步）
+    window.addEventListener("local-storage-update", loadTasks);
+
+    return () => {
+      window.removeEventListener("storage", loadTasks);
+      window.removeEventListener("local-storage-update", loadTasks);
+    };
+  }, []);
 
   return (
     <GlassCard className="h-full p-4 flex flex-col relative overflow-hidden min-h-[220px]">
@@ -91,26 +139,52 @@ const ToDoWidget = () => {
         <br />
         Sky
       </div>
-      <h3 className="text-center text-gray-800 font-medium mb-3 border-b-2 border-dashed border-gray-400/30 pb-2 mx-4">
+      <Link
+        href="/focus"
+        className="text-center text-gray-800 font-medium mb-3 border-b-2 border-dashed border-gray-400/30 pb-2 mx-4 block hover:text-blue-600 transition"
+      >
         To Do List
-      </h3>
-      <div className="flex-1 flex flex-col gap-3 z-10">
-        {items.map((item, i) => (
-          <div
-            key={i}
-            className="flex items-center justify-between text-sm text-gray-700 font-medium"
-          >
-            <div className="flex items-center gap-2">
-              <span className="text-white drop-shadow-sm">♥</span>
-              <span>{item.text}</span>
-            </div>
-            <div className="w-4 h-4 border-2 border-gray-600/50 rounded" />
+      </Link>
+      <div className="flex-1 flex flex-col gap-3 z-10 overflow-y-auto max-h-[140px] pr-1 no-scrollbar">
+        {items.length === 0 ? (
+          <div className="text-xs text-gray-500 text-center py-4">
+            暂无任务，点击标题添加
           </div>
-        ))}
+        ) : (
+          items.slice(0, 5).map((item, i) => (
+            <div
+              key={item.id || i}
+              className="flex items-center justify-between text-sm text-gray-700 font-medium group cursor-pointer"
+              onClick={() => toggleDone(item.id)}
+            >
+              <div
+                className={`flex items-center gap-2 transition ${
+                  item.done ? "opacity-50 line-through" : ""
+                }`}
+              >
+                <span className="text-blue-400 drop-shadow-sm text-[10px]">
+                  ●
+                </span>
+                <span className="truncate max-w-[120px]">{item.text}</span>
+              </div>
+              <div
+                className={`w-4 h-4 border-2 rounded flex items-center justify-center transition ${
+                  item.done
+                    ? "bg-blue-400 border-blue-400"
+                    : "border-gray-400/50"
+                }`}
+              >
+                {item.done && (
+                  <span className="text-white text-xs font-bold">✓</span>
+                )}
+              </div>
+            </div>
+          ))
+        )}
       </div>
-      <div className="mt-2 relative h-12 w-full opacity-90">
+      <div className="mt-2 relative h-12 w-full opacity-90 shrink-0">
         <div className="absolute inset-0 bg-blue-200/40 rotate-2 transform rounded flex items-center justify-center text-blue-800 font-bold text-sm">
-          想去海边
+          {items.filter((i) => i.done).length}/{items.length} 完成
         </div>
       </div>
     </GlassCard>
@@ -273,11 +347,21 @@ export default function HomePage() {
                 </span>
               </Link>
 
-              <AppIcon
-                icon={ImageIcon}
-                name="相册"
-                color="bg-gradient-to-tr from-purple-300 to-blue-300"
-              />
+              <Link
+                href="/focus"
+                className="flex flex-col items-center gap-1 group"
+              >
+                <div className="w-[3.5rem] h-[3.5rem] rounded-2xl flex items-center justify-center shadow-md transition-transform group-active:scale-95 relative overflow-hidden p-1">
+                  <img
+                    src="\icons\波斯猫.png"
+                    className="w-full h-full object-contain"
+                    alt="专注闹钟"
+                  />
+                </div>
+                <span className="text-xs text-white font-medium drop-shadow-md">
+                  专注闹钟
+                </span>
+              </Link>
               <AppIcon
                 icon={Camera}
                 name="相机"

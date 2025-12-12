@@ -1,132 +1,205 @@
 import { NextRequest, NextResponse } from "next/server";
-// ⬇️⬇️⬇️ 核心技术：使用 Node.js 原生 createRequire
-// 这能像在纯 Node 环境一样加载库，绝对不会出错
-import { createRequire } from "module";
 
-const require = createRequire(import.meta.url);
-// 动态加载库
-const NeteaseCloudMusicApi = require("netease-cloud-music-api");
+// 使用 require 导入
+const NeteaseApi = require("NeteaseCloudMusicApi");
 
-interface MusicRequestBody {
-  action: string;
-  cookie?: string;
-  [key: string]: any;
-}
+export const dynamic = "force-dynamic";
 
-// 代理请求执行函数
-async function handleNeteaseRequest(
-  apiFunc: any,
-  query: any,
-  cookie: string = ""
-) {
-  try {
-    const result = await apiFunc({
-      ...query,
-      cookie,
-      realIP: "114.114.114.114", // 伪造国内IP
-    });
-    return result;
-  } catch (error: any) {
-    return {
-      status: 200,
-      body: {
-        code: 500,
-        msg: error.message || "Server Error",
-        data: null,
-      },
-    };
+// 🔥 新增：重试辅助函数 🔥
+// 如果遇到 ECONNRESET 或网络错误，自动重试最多 3 次
+async function fetchWithRetry(apiFn: Function, params: any, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await apiFn(params);
+    } catch (error: any) {
+      const isNetworkError =
+        error.code === "ECONNRESET" ||
+        error.code === "ETIMEDOUT" ||
+        error.status == 502;
+      // 如果是最后一次尝试，或者不是网络错误，直接抛出
+      if (i === retries - 1 || !isNetworkError) {
+        throw error;
+      }
+      console.warn(
+        `[API Retry] 请求失败 (${error.code || error.status})，正在进行第 ${
+          i + 1
+        } 次重试...`
+      );
+      // 等待 300ms 再重试，给网络一点缓冲
+      await new Promise((r) => setTimeout(r, 500));
+    }
   }
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(request: NextRequest) {
   try {
-    const body: MusicRequestBody = await req.json();
-    const { action, ...params } = body;
-    const cookie = params.cookie || "";
+    const body = await request.json();
+    const { action, cookie, ...params } = body;
 
-    // 从库中解构我们需要的方法
-    // 只要第一步安装正确，这些方法 100% 会存在
-    const {
-      cloudsearch,
-      song_url,
-      login_qr_key,
-      login_qr_create,
-      login_qr_check,
-      user_account,
-      user_playlist,
-    } = NeteaseCloudMusicApi;
+    // 通用参数
+    const commonParams = {
+      cookie: cookie || "",
+      timestamp: Date.now(),
+      os: "pc",
+      realIP: undefined, // 国内环境不传 realIP
+      proxy: undefined,
+    };
 
-    // 🔴 调试日志：再次打印 Keys，确认这次是对的
-    // 正确的输出应该包含：cloudsearch, login_qr_key 等下划线命名的函数
-    console.log(`[API Check] Action: ${action}`);
-    if (action === "qr_key" && !login_qr_key) {
-      console.error(
-        "❌ 严重错误：库加载成功，但函数名不对！当前库包含:",
-        Object.keys(NeteaseCloudMusicApi).slice(0, 10)
-      );
-      return NextResponse.json(
-        { code: 500, msg: "Library Mismatch" },
-        { status: 500 }
-      );
-    }
+    let resultData = null;
 
-    let result;
-
-    // 路由分发
     switch (action) {
-      case "search":
-        result = await handleNeteaseRequest(
-          cloudsearch,
-          { keywords: params.keywords, limit: 30 },
-          cookie
+      case "get_liked_playlist":
+        if (!cookie) return NextResponse.json({ code: 401, msg: "No cookie" });
+
+        // 1. 获取 UserID
+        let userId = null;
+        try {
+          const loginStatus = await fetchWithRetry(
+            NeteaseApi.login_status,
+            commonParams
+          );
+          userId = loginStatus.body.data?.profile?.userId;
+        } catch (e: any) {
+          console.warn("[API] UserID 获取波动:", e.message);
+        }
+
+        // 2. 获取歌单列表
+        const playlistRes = await fetchWithRetry(NeteaseApi.user_playlist, {
+          uid: userId,
+          limit: 30,
+          ...commonParams,
+        });
+
+        const playlists = playlistRes.body.playlist || [];
+        if (playlists.length === 0) {
+          return NextResponse.json({ code: 404, msg: "未找到歌单" });
+        }
+
+        // 3. 锁定歌单
+        const likedPlaylist =
+          playlists.find((p: any) => p.specialType === 5) || playlists[0];
+        console.log(`[API Music] 锁定歌单: ${likedPlaylist.name}`);
+
+        // 4. 获取歌曲 (仅取前 12 首)
+        // 读取前端传来的分页参数，如果没有传，则默认获取前 100 首
+        // 如果你想一次同步更多，可以把 100 改成 300 或 500
+        const defaultLimit = 50;
+        const limit = params.limit || defaultLimit;
+        const offset = params.offset || 0;
+
+        console.log(
+          `[API Music] 获取歌曲列表: limit=${limit}, offset=${offset}`
         );
+
+        // 4. 获取歌曲详情
+        const trackRes = await fetchWithRetry(NeteaseApi.playlist_track_all, {
+          id: likedPlaylist.id,
+          limit: limit, // 使用动态数量
+          offset: offset, // 使用动态偏移量
+          ...commonParams,
+        });
+
+        const songs = trackRes.body.songs || [];
+
+        // 5. 返回给前端（不批量获取 URL，防止风控）
+        resultData = {
+          code: 200,
+          songs: songs,
+        };
         break;
-      case "song_url":
-        result = await handleNeteaseRequest(
-          song_url,
-          { id: params.id },
-          cookie
-        );
+
+      case "get_song_url":
+        console.log(`[API] 正在获取歌曲 URL: ${params.id}`);
+        let finalUrl = null;
+
+        // 🔥 阶段一：尝试获取 exhigh (极高音质) + 重试机制
+        try {
+          const urlRes = await fetchWithRetry(NeteaseApi.song_url, {
+            id: params.id,
+            level: "exhigh",
+            ...commonParams,
+          });
+          finalUrl = urlRes.body.data?.[0]?.url;
+        } catch (e) {
+          console.warn(`[API] 极高音质获取异常，准备降级`);
+        }
+
+        // 🔥 阶段二：标准音质
+        if (!finalUrl) {
+          try {
+            const urlRes = await fetchWithRetry(NeteaseApi.song_url, {
+              id: params.id,
+              level: "standard",
+              ...commonParams,
+            });
+            finalUrl = urlRes.body.data?.[0]?.url;
+          } catch (e) {
+            console.error(`[API] 标准音质也获取失败`);
+          }
+        }
+
+        // 🔥 阶段三：匿名模式保底
+        if (!finalUrl) {
+          try {
+            const urlRes = await fetchWithRetry(NeteaseApi.song_url, {
+              id: params.id,
+              level: "standard",
+              timestamp: Date.now(),
+              realIP: undefined,
+            });
+            finalUrl = urlRes.body.data?.[0]?.url;
+          } catch (e) {}
+        }
+
+        if (!finalUrl) {
+          resultData = { code: 404, msg: "无法获取播放链接" };
+        } else {
+          console.log(`[API] 获取成功: ${finalUrl.substring(0, 30)}...`);
+          resultData = { data: [{ url: finalUrl }] };
+        }
+        break; // ✅ 确保这里有 break，防止执行到 get_lyric
+
+      case "get_lyric":
+        try {
+          const lyricRes = await fetchWithRetry(NeteaseApi.lyric, {
+            id: params.id,
+            ...commonParams,
+          });
+
+          if (lyricRes.body.code !== 200 || !lyricRes.body.lrc) {
+            resultData = {
+              code: 404,
+              msg: "No lyric found",
+              lrc: "[00:00.00]暂无歌词",
+            };
+          } else {
+            resultData = {
+              code: 200,
+              lrc: lyricRes.body.lrc.lyric || "[00:00.00]暂无歌词",
+              tlyric: lyricRes.body.tlyric?.lyric || "",
+            };
+          }
+        } catch (e) {
+          console.error(`[API Lyric Error] ID: ${params.id}`, e);
+          resultData = {
+            code: 500,
+            msg: "获取歌词失败",
+            lrc: "[00:00.00]获取歌词失败",
+          };
+        }
         break;
-      case "qr_key":
-        result = await handleNeteaseRequest(login_qr_key, {}, cookie);
-        break;
-      case "qr_create":
-        result = await handleNeteaseRequest(
-          login_qr_create,
-          { key: params.key, qrimg: true },
-          cookie
-        );
-        break;
-      case "qr_check":
-        result = await handleNeteaseRequest(
-          login_qr_check,
-          { key: params.key },
-          cookie
-        );
-        break;
-      case "user_account":
-        result = await handleNeteaseRequest(user_account, {}, cookie);
-        break;
-      case "user_playlist":
-        result = await handleNeteaseRequest(
-          user_playlist,
-          { uid: params.uid },
-          cookie
-        );
-        break;
+
       default:
-        return NextResponse.json(
-          { error: `Unknown action: ${action}` },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: "Unknown action" }, { status: 400 });
     }
 
-    return NextResponse.json(
-      result?.body || { code: 500, msg: "No body returned" }
-    );
-  } catch (err: any) {
-    console.error("[System Error]", err);
-    return NextResponse.json({ code: 500, msg: err.message }, { status: 500 });
+    return NextResponse.json(resultData);
+  } catch (error: any) {
+    console.error("[Music API Critical Error]", error);
+    return NextResponse.json({
+      code: 500,
+      msg: `API Error: ${error.message}`,
+      details: error.toString(),
+    });
   }
 }

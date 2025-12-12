@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { useMusicPlayer, Song } from "@/context/MusicContext";
 import {
@@ -36,8 +36,30 @@ const DEFAULT_COVER =
 const DEFAULT_AVATAR =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23e2e8f0'%3E%3Crect width='24' height='24' fill='white'/%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z' fill='%23cbd5e1'/%3E%3C/svg%3E";
 
-// 🔥 只保留这两个核心分类
 type SearchSource = "netease" | "aggregate";
+
+// 🔥 1. 歌词解析工具函数
+const parseLyric = (lrcString: string) => {
+  if (!lrcString) return [];
+  const lines = lrcString.split("\n");
+  const result: { time: number; text: string }[] = [];
+  const timeExp = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
+
+  for (const line of lines) {
+    const match = timeExp.exec(line);
+    if (match) {
+      const minutes = parseInt(match[1]);
+      const seconds = parseInt(match[2]);
+      const milliseconds = parseFloat("0." + match[3]);
+      const time = minutes * 60 + seconds + milliseconds;
+      const text = line.replace(timeExp, "").trim();
+      if (text) {
+        result.push({ time, text });
+      }
+    }
+  }
+  return result;
+};
 
 export default function MusicPage() {
   const {
@@ -46,6 +68,7 @@ export default function MusicPage() {
     currentSong,
     isPlaying,
     progress,
+    currentTime, // 🔥 必须确保 MusicContext 导出了这个状态
     playMode,
     addToPlaylist,
     playSong,
@@ -84,8 +107,38 @@ export default function MusicPage() {
   const [partnerAvatar, setPartnerAvatar] = useState("");
   const [myAvatar, setMyAvatar] = useState("");
 
+  // 🔥 2. 歌词状态管理
+  const [showLyrics, setShowLyrics] = useState(false);
+  const lyricsContainerRef = useRef<HTMLDivElement>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const loginCheckTimer = useRef<NodeJS.Timeout | null>(null);
+
+  // 🔥 3. 解析歌词 & 计算高亮行
+  const lyrics = useMemo(
+    () => parseLyric(currentSong?.lyric || ""),
+    [currentSong?.lyric]
+  );
+
+  const activeLyricIndex = useMemo(() => {
+    if (!lyrics.length) return -1;
+    // 找到最后一个时间 <= currentTime 的行
+    let index = lyrics.findIndex((l) => l.time > currentTime);
+    if (index === -1) return lyrics.length - 1; // 播放到最后
+    return index - 1;
+  }, [currentTime, lyrics]);
+
+  // 🔥 4. 歌词自动滚动
+  useEffect(() => {
+    if (showLyrics && lyricsContainerRef.current && activeLyricIndex >= 0) {
+      const activeEl = lyricsContainerRef.current.children[
+        activeLyricIndex + 1
+      ] as HTMLElement; // +1 是因为有个顶部垫片
+      if (activeEl) {
+        activeEl.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }
+  }, [activeLyricIndex, showLyrics]);
 
   useEffect(() => {
     const userProfile = localStorage.getItem("user_profile_v4");
@@ -170,7 +223,6 @@ export default function MusicPage() {
     setResolvingId(song.id);
 
     try {
-      // 传递 title 和 artist 给后端，以便触发救援
       const res = await fetch(
         `/api/music/search?action=url&id=${song.id}&source=${
           song.source
@@ -203,22 +255,32 @@ export default function MusicPage() {
   const startLogin = async () => {
     setShowLoginModal(true);
     try {
-      const res = await fetch("/api/music/login/qr");
+      const res = await fetch(`/api/music/login/qr?timestamp=${Date.now()}`);
       const data = await res.json();
       setQrInfo({ key: data.key, img: data.qrimg });
       if (loginCheckTimer.current) clearInterval(loginCheckTimer.current);
       loginCheckTimer.current = setInterval(async () => {
-        const checkRes = await fetch(`/api/music/login/check?key=${data.key}`);
-        const checkData = await checkRes.json();
-        if (checkData.code === 803) {
-          setLoginStatus("登录成功！");
-          localStorage.setItem("netease_cookie", checkData.cookie);
-          setIsLoggedIn(true);
-          clearInterval(loginCheckTimer.current!);
-          setTimeout(() => {
-            setShowLoginModal(false);
-            syncPlaylist(checkData.cookie);
-          }, 1000);
+        try {
+          const checkRes = await fetch(
+            `/api/music/login/check?key=${data.key}&timestamp=${Date.now()}`
+          );
+          const checkData = await checkRes.json();
+
+          if (checkData.code === 800) {
+            setLoginStatus("二维码已过期，请刷新");
+            clearInterval(loginCheckTimer.current!);
+          } else if (checkData.code === 803) {
+            setLoginStatus("登录成功！");
+            localStorage.setItem("netease_cookie", checkData.cookie);
+            setIsLoggedIn(true);
+            clearInterval(loginCheckTimer.current!);
+            setTimeout(() => {
+              setShowLoginModal(false);
+              syncPlaylist(checkData.cookie);
+            }, 1000);
+          }
+        } catch (e) {
+          console.error("检查登录状态失败", e);
         }
       }, 3000);
     } catch (e) {
@@ -231,29 +293,43 @@ export default function MusicPage() {
     if (!savedCookie) return startLogin();
     alert("正在连接网易云...");
     try {
-      const res = await fetch("/api/music/user/playlist", {
+      const res = await fetch("/api/music", {
         method: "POST",
-        body: JSON.stringify({ cookie: savedCookie }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "get_liked_playlist",
+          cookie: savedCookie,
+        }),
       });
+
       if (!res.ok) throw new Error("API Error");
       const data = await res.json();
+
+      if (data.code === 301) {
+        alert("登录已失效，请重新扫码");
+        handleLogout();
+        return;
+      }
+
       if (data.songs && data.songs.length > 0) {
         const neteaseSongs: Song[] = data.songs.map((s: any) => ({
           id: String(s.id),
           title: s.name,
           artist: s.ar.map((a: any) => a.name).join("/"),
-          url: s.url,
+          url:
+            s.realUrl ||
+            `https://music.163.com/song/media/outer/url?id=${s.id}.mp3`,
           cover: s.al.picUrl,
           source: "netease",
         }));
         addToPlaylist(neteaseSongs);
         alert(`成功同步 ${neteaseSongs.length} 首！`);
-      } else {
-        alert("同步成功，但歌单为空");
       }
     } catch (e) {
+      console.error(e);
       alert("同步失败，请检查网络或重新登录");
-      setIsLoggedIn(false);
     }
   };
 
@@ -339,113 +415,166 @@ export default function MusicPage() {
         </button>
       </header>
 
-      {/* Main */}
+      {/* 🔥 Main Area: 控制切换 歌词 / 封面 🔥 */}
       <main
-        className="relative z-10 flex-1 flex flex-col items-center justify-center -mt-8"
-        onClick={() => setShowDrawer(false)}
+        className="relative z-10 flex-1 flex flex-col items-center justify-center -mt-8 w-full overflow-hidden"
+        onClick={() => {
+          // 如果抽屉打开，优先关抽屉；否则切换歌词
+          if (showDrawer) setShowDrawer(false);
+          else setShowLyrics(!showLyrics);
+        }}
       >
-        {isSharedMode ? (
-          // P2 Style
-          <div className="relative w-full flex justify-center items-center h-80">
-            <svg
-              className="absolute w-64 h-32 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-0 pointer-events-none"
-              viewBox="0 0 200 100"
-            >
-              <path
-                d="M 20,50 Q 100,100 180,50"
-                fill="none"
-                stroke="url(#gradient)"
-                strokeWidth="2"
-                className="animate-pulse"
-              />
-              <defs>
-                <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor="rgba(255,255,255,0.1)" />
-                  <stop offset="50%" stopColor="rgba(255,255,255,0.8)" />
-                  <stop offset="100%" stopColor="rgba(255,255,255,0.1)" />
-                </linearGradient>
-              </defs>
-            </svg>
-            <div className="absolute top-0 left-[80px] flex flex-col items-center gap-2 animate-float-slow">
-              <div className="w-16 h-16 rounded-full border-2 border-white/20 p-1 shadow-[0_0_20px_rgba(255,255,255,0.2)] bg-white/10 backdrop-blur-sm">
-                <img
-                  src={partnerAvatar || DEFAULT_AVATAR}
-                  className="w-full h-full rounded-full object-cover"
-                />
+        {showLyrics ? (
+          // === 🅰️ 歌词视图 ===
+          <div
+            className="w-full h-[60vh] overflow-y-auto px-8 text-center custom-scrollbar flex flex-col items-center"
+            ref={lyricsContainerRef}
+          >
+            <div className="h-[25vh] shrink-0" /> {/* 顶部留白 */}
+            {lyrics.length > 0 ? (
+              lyrics.map((line, index) => (
+                <p
+                  key={index}
+                  className={`text-base my-4 transition-all duration-300 cursor-pointer ${
+                    index === activeLyricIndex
+                      ? "text-white font-bold scale-110 drop-shadow-md"
+                      : "text-white/40 scale-100 hover:text-white/70"
+                  }`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    seek(line.time); // 点击歌词跳转播放
+                  }}
+                >
+                  {line.text}
+                </p>
+              ))
+            ) : (
+              <div className="text-white/40 mt-20 flex flex-col gap-2">
+                <span>暂无歌词</span>
+                <span className="text-xs opacity-50">纯音乐或歌词未加载</span>
               </div>
-              {isPlaying && (
-                <div className="flex gap-0.5 h-3 items-end">
-                  <div className="w-0.5 bg-green-400 animate-music-bar h-2"></div>
-                  <div className="w-0.5 bg-green-400 animate-music-bar h-3 animation-delay-100"></div>
-                  <div className="w-0.5 bg-green-400 animate-music-bar h-1 animation-delay-200"></div>
-                </div>
-              )}
-            </div>
-            <div className="absolute top-6 right-[80px] flex flex-col items-center gap-2 animate-float-slower">
-              <div className="w-14 h-14 rounded-full border-2 border-white/10 p-1 bg-black/20 backdrop-blur-sm">
-                <img
-                  src={myAvatar || DEFAULT_AVATAR}
-                  className="w-full h-full rounded-full object-cover opacity-90"
-                />
-              </div>
-            </div>
-            <div className="relative w-48 h-48 rounded-full bg-black border-[4px] border-white/5 shadow-2xl mt-24 flex items-center justify-center">
-              <div
-                className={`w-full h-full rounded-full overflow-hidden border-[25px] border-[#181818] relative ${
-                  isPlaying ? "animate-spin-slow" : ""
-                }`}
-                style={{ animationPlayState: isPlaying ? "running" : "paused" }}
-              >
-                <img
-                  src={currentSong?.cover || DEFAULT_COVER}
-                  className="w-full h-full object-cover opacity-80"
-                />
-              </div>
-            </div>
-            <div className="absolute top-24 text-[10px] text-white/40 tracking-widest animate-pulse">
-              等待好友加入中... (已连接)
-            </div>
+            )}
+            <div className="h-[25vh] shrink-0" /> {/* 底部留白 */}
           </div>
         ) : (
-          // P1 Style
+          // === 🅱️ 封面视图 (包含 原版 & 一起听版) ===
           <>
-            <div
-              className={`absolute top-0 left-1/2 ml-[-15px] w-24 h-36 z-20 origin-top-left transition-transform duration-500 ease-in-out ${
-                isPlaying ? "rotate-0" : "-rotate-[25deg]"
-              }`}
-              style={{ transformOrigin: "15px 15px" }}
-            >
-              <div className="w-4 h-4 rounded-full bg-gray-200 absolute top-0 left-0 shadow-lg border border-black/10"></div>
-              <div className="w-2 h-24 bg-gradient-to-b from-gray-300 to-gray-400 absolute top-2 left-1 rotate-[15deg]"></div>
-              <div className="w-14 h-9 bg-gray-200 rounded-sm absolute bottom-0 left-[-8px] rotate-[15deg] shadow-md"></div>
-            </div>
-            <div className="relative w-72 h-72 rounded-full bg-[#181818] border-[6px] border-white/5 shadow-2xl flex items-center justify-center">
-              <div
-                className={`w-full h-full rounded-full overflow-hidden border-[40px] border-[#181818] relative ${
-                  isPlaying ? "animate-spin-slow" : ""
-                }`}
-                style={{ animationPlayState: isPlaying ? "running" : "paused" }}
-              >
-                <img
-                  src={currentSong?.cover || DEFAULT_COVER}
-                  className="w-full h-full object-cover"
-                />
+            {isSharedMode ? (
+              // 一起听 UI (保持原样)
+              <div className="relative w-full flex justify-center items-center h-80">
+                <svg
+                  className="absolute w-64 h-32 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-0 pointer-events-none"
+                  viewBox="0 0 200 100"
+                >
+                  <path
+                    d="M 20,50 Q 100,100 180,50"
+                    fill="none"
+                    stroke="url(#gradient)"
+                    strokeWidth="2"
+                    className="animate-pulse"
+                  />
+                  <defs>
+                    <linearGradient
+                      id="gradient"
+                      x1="0%"
+                      y1="0%"
+                      x2="100%"
+                      y2="0%"
+                    >
+                      <stop offset="0%" stopColor="rgba(255,255,255,0.1)" />
+                      <stop offset="50%" stopColor="rgba(255,255,255,0.8)" />
+                      <stop offset="100%" stopColor="rgba(255,255,255,0.1)" />
+                    </linearGradient>
+                  </defs>
+                </svg>
+                <div className="absolute top-0 left-[80px] flex flex-col items-center gap-2 animate-float-slow">
+                  <div className="w-16 h-16 rounded-full border-2 border-white/20 p-1 shadow-[0_0_20px_rgba(255,255,255,0.2)] bg-white/10 backdrop-blur-sm">
+                    <img
+                      src={partnerAvatar || DEFAULT_AVATAR}
+                      className="w-full h-full rounded-full object-cover"
+                    />
+                  </div>
+                  {isPlaying && (
+                    <div className="flex gap-0.5 h-3 items-end">
+                      <div className="w-0.5 bg-green-400 animate-music-bar h-2"></div>
+                      <div className="w-0.5 bg-green-400 animate-music-bar h-3 animation-delay-100"></div>
+                      <div className="w-0.5 bg-green-400 animate-music-bar h-1 animation-delay-200"></div>
+                    </div>
+                  )}
+                </div>
+                <div className="absolute top-6 right-[80px] flex flex-col items-center gap-2 animate-float-slower">
+                  <div className="w-14 h-14 rounded-full border-2 border-white/10 p-1 bg-black/20 backdrop-blur-sm">
+                    <img
+                      src={myAvatar || DEFAULT_AVATAR}
+                      className="w-full h-full rounded-full object-cover opacity-90"
+                    />
+                  </div>
+                </div>
+                <div className="relative w-48 h-48 rounded-full bg-black border-[4px] border-white/5 shadow-2xl mt-24 flex items-center justify-center">
+                  <div
+                    className={`w-full h-full rounded-full overflow-hidden border-[25px] border-[#181818] relative ${
+                      isPlaying ? "animate-spin-slow" : ""
+                    }`}
+                    style={{
+                      animationPlayState: isPlaying ? "running" : "paused",
+                    }}
+                  >
+                    <img
+                      src={currentSong?.cover || DEFAULT_COVER}
+                      className="w-full h-full object-cover opacity-80"
+                    />
+                  </div>
+                </div>
+                <div className="absolute top-24 text-[10px] text-white/40 tracking-widest animate-pulse">
+                  等待好友加入中... (已连接)
+                </div>
               </div>
-            </div>
+            ) : (
+              // 个人播放 UI (保持原样)
+              <div className="relative w-full flex justify-center items-center h-80">
+                <div
+                  className={`absolute top-0 left-1/2 ml-[-15px] w-24 h-36 z-20 origin-top-left transition-transform duration-500 ease-in-out ${
+                    isPlaying ? "rotate-0" : "-rotate-[25deg]"
+                  }`}
+                  style={{ transformOrigin: "15px 15px" }}
+                ></div>
+                <div className="relative w-72 h-72 rounded-full bg-[#181818] border-[6px] border-white/5 shadow-2xl flex items-center justify-center">
+                  <div
+                    className={`w-full h-full rounded-full overflow-hidden border-[40px] border-[#181818] relative ${
+                      isPlaying ? "animate-spin-slow" : ""
+                    }`}
+                    style={{
+                      animationPlayState: isPlaying ? "running" : "paused",
+                    }}
+                  >
+                    <img
+                      src={currentSong?.cover || DEFAULT_COVER}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
 
-        <div className="mt-12 text-center px-8 w-full">
-          <h2 className="text-2xl font-bold text-white mb-2 truncate drop-shadow-md">
-            {currentSong?.title || "等待播放"}
-          </h2>
-          <p className="text-white/60 text-sm truncate">
-            {currentSong?.artist || "请添加歌曲"}
-          </p>
-        </div>
+        {/* 歌曲信息 (仅在非歌词模式显示详细提示，歌词模式下不显示以免遮挡) */}
+        {!showLyrics && (
+          <div className="mt-12 text-center px-8 w-full animate-in fade-in">
+            <h2 className="text-2xl font-bold text-white mb-2 truncate drop-shadow-md">
+              {currentSong?.title || "等待播放"}
+            </h2>
+            <p className="text-white/60 text-sm truncate">
+              {currentSong?.artist || "请添加歌曲"}
+            </p>
+            <p className="text-white/30 text-[10px] mt-3 animate-pulse">
+              点击封面查看歌词
+            </p>
+          </div>
+        )}
       </main>
 
-      {/* Footer */}
+      {/* Footer (保持原样) */}
       <footer className="relative z-20 px-6 pb-12 pt-4 w-full">
         <div className="w-full flex items-center gap-3 text-xs text-white/50 font-mono mb-6">
           <span>{formatTime(audioRef.current?.currentTime || 0)}</span>
@@ -551,7 +680,6 @@ export default function MusicPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-          {/* Playlist 和 Import 内容省略，保持原样 */}
           {activeTab === "playlist" && (
             <div className="space-y-1">
               <div className="flex justify-between text-xs text-white/40 mb-2 px-2">
@@ -601,10 +729,8 @@ export default function MusicPage() {
             </div>
           )}
 
-          {/* 🔥🔥🔥 搜索 Tab (只保留两类) 🔥🔥🔥 */}
           {activeTab === "search" && (
             <div className="flex flex-col h-full">
-              {/* 🚀 搜索源切换器 */}
               <div className="flex justify-center gap-2 mb-3">
                 {[
                   { id: "netease", label: "网易云音乐", icon: Cloud },
@@ -670,7 +796,6 @@ export default function MusicPage() {
                         </div>
                         <div className="text-xs text-white/40 truncate flex gap-2 items-center">
                           <span>{song.artist}</span>
-                          {/* 来源标签 */}
                           <span
                             className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-bold ${
                               song.provider === "netease"
@@ -705,7 +830,6 @@ export default function MusicPage() {
             </div>
           )}
 
-          {/* Import Tab (保持原样) */}
           {activeTab === "import" && (
             <div className="space-y-6">
               <div className="bg-gradient-to-br from-red-900/60 to-black p-5 rounded-2xl border border-red-500/30">
@@ -739,7 +863,6 @@ export default function MusicPage() {
                   </button>
                 )}
               </div>
-              {/* ...Upload and Link Import... */}
               <div className="bg-white/5 p-4 rounded-2xl">
                 <h3 className="text-sm font-bold text-white/80 mb-3 flex items-center gap-2">
                   <Upload className="w-4 h-4" /> 本地上传
@@ -858,7 +981,7 @@ const TabButton = ({ active, onClick, icon: Icon, label }: any) => (
     className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all ${
       active
         ? "bg-white text-black shadow-lg"
-        : "text-white/50 hover:text-white"
+        : "text-white/100 hover:text-white"
     }`}
   >
     <Icon className="w-3.5 h-3.5" />

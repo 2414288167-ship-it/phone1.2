@@ -367,7 +367,8 @@ export default function ChatPage({ params }: PageProps) {
     // 3. 只有当“最后一条是用户发的” 且 “状态是 sent” 时，才开始倒计时
     if (lastMsg.role === "user" && lastMsg.status === "sent") {
       const isInvite = lastMsg.type === "music_invite";
-      const delay = isInvite ? 1000 : 4000;
+      const isFocusShare = lastMsg.type === "focus_share"; // 🔥 专注卡片无需长时间等待
+      const delay = isInvite || isFocusShare ? 1000 : 4000;
 
       console.log(`⏱️ 用户停止交互，开始倒计时 ${delay}ms ...`);
 
@@ -405,10 +406,18 @@ export default function ChatPage({ params }: PageProps) {
       }
     }
 
+    // 🔥 增加对专注分享卡片的识别
+    let focusPrompt = "";
+    const lastMsg = currentMessages[currentMessages.length - 1];
+    if (lastMsg.type === "focus_share") {
+      focusPrompt = `\n[SYSTEM EVENT: FOCUS SUMMARY SHARE]\nThe user has just completed a focus/study session and shared the summary card.\n- Total duration: ${lastMsg.extra?.totalSeconds} seconds.\n- Task description: ${lastMsg.extra?.taskName}.\n- INSTRUCTION: Praise the user warmly and encourage them. You can ask what they learned or suggest a break. Be proud of them.`;
+    }
+
     let additionalPrompt = "";
     if (presetContext) additionalPrompt += `\n${presetContext}`;
     if (worldBookContext) additionalPrompt += worldBookContext;
     if (musicPrompt) additionalPrompt += musicPrompt;
+    if (focusPrompt) additionalPrompt += focusPrompt; // 🔥 注入专注提示词
 
     const enhancedContactInfo = {
       ...contactInfo,
@@ -660,7 +669,7 @@ export default function ChatPage({ params }: PageProps) {
     }
   };
 
-  // 发送消息 (纯净版，不负责倒计时)
+  // 🔥 升级版 handleUserSend：支持 extraData 参数
   const handleUserSend = (
     text: string,
     type: string = "text",
@@ -668,7 +677,8 @@ export default function ChatPage({ params }: PageProps) {
     audioUrl?: string,
     tempId?: string,
     imageDesc?: string,
-    inviteCard?: boolean
+    inviteCard?: boolean,
+    extraData?: any // 🔥 新增：额外数据 (用于专注卡片)
   ) => {
     if (type === "text" && !text?.trim() && !inviteCard) return;
 
@@ -676,7 +686,7 @@ export default function ChatPage({ params }: PageProps) {
     setMessages((prev) => {
       let newMessages = [...prev];
       if (tempId) {
-        // 语音识别完成，更新状态为 sent -> 此时 useEffect 会检测到变化 -> 如果没有其他交互，4秒后触发 AI
+        // 语音识别完成，更新状态为 sent
         newMessages = newMessages.map((msg) =>
           msg.id === tempId
             ? { ...msg, content: text, status: "sent" as const }
@@ -693,7 +703,7 @@ export default function ChatPage({ params }: PageProps) {
           (inviteCard
             ? `(发送了音乐邀请卡片) 正在听：${currentSong?.title || "歌曲"}`
             : "");
-        // 如果是语音还没转完文字，状态是 sending -> 此时 useEffect 会忽略它，不会计时
+        // 如果是语音还没转完文字，状态是 sending
         const status = type === "audio" && !text ? "sending" : "sent";
 
         newMessages.push({
@@ -706,15 +716,13 @@ export default function ChatPage({ params }: PageProps) {
           audioUrl,
           status,
           alt: inviteCard ? currentSong?.cover : imageDesc,
-          extra: inviteCard ? { songTitle: currentSong?.title } : undefined,
+          extra: inviteCard ? { songTitle: currentSong?.title } : extraData, // 🔥 存入 extraData
         });
       }
       return newMessages;
     });
     if (type === "text" && !inviteCard) setInput("");
-    // 如果是开始录音，标记交互状态
     if (type === "audio" && !text) setIsRecording(true);
-    // 如果是录音完成(有text)，取消标记
     if (type === "audio" && text) setIsRecording(false);
 
     // 2. 触发 AI 防抖逻辑
@@ -723,7 +731,7 @@ export default function ChatPage({ params }: PageProps) {
     if (isReadyToSendToAI || inviteCard) {
       if (replyTimerRef.current) clearTimeout(replyTimerRef.current);
 
-      const delay = inviteCard ? 1000 : 4000;
+      const delay = inviteCard || type === "focus_share" ? 1000 : 4000;
 
       replyTimerRef.current = setTimeout(() => {
         setMessages((currentMsgs) => {
@@ -751,10 +759,18 @@ export default function ChatPage({ params }: PageProps) {
               }
             }
 
+            // 🔥 再次确保 trigger 时的 Prompt 包含专注信息
+            let focusPrompt = "";
+            const lastMsg = currentMsgs[currentMsgs.length - 1];
+            if (lastMsg.type === "focus_share") {
+              focusPrompt = `\n[SYSTEM EVENT: FOCUS SUMMARY SHARE]\nThe user has just completed a focus/study session and shared the summary card.\n- Total duration: ${lastMsg.extra?.totalSeconds} seconds.\n- Task description: ${lastMsg.extra?.taskName}.\n- INSTRUCTION: Praise the user warmly and encourage them. You can ask what they learned or suggest a break. Be proud of them.`;
+            }
+
             let additionalPrompt = "";
             if (presetContext) additionalPrompt += `\n${presetContext}`;
             if (worldBookContext) additionalPrompt += worldBookContext;
             if (musicPrompt) additionalPrompt += musicPrompt;
+            if (focusPrompt) additionalPrompt += focusPrompt; // 🔥
 
             const enhancedContactInfo = {
               ...contactInfo,
@@ -762,7 +778,6 @@ export default function ChatPage({ params }: PageProps) {
             };
 
             console.log("🚀 触发 AI 回复...");
-            // 发送请求给 AI
             requestAIReply(conversationId, enhancedContactInfo, currentMsgs);
           }
           return currentMsgs;
@@ -770,6 +785,41 @@ export default function ChatPage({ params }: PageProps) {
       }, delay);
     }
   };
+
+  // 🔥🔥🔥 核心修复：增加 setTimeout 延迟，防止被历史消息加载覆盖 🔥🔥🔥
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const pendingShare = localStorage.getItem("pending_share_message");
+      if (pendingShare && conversationId) {
+        try {
+          const data = JSON.parse(pendingShare);
+
+          // 调用发送函数
+          handleUserSend(
+            "我刚刚完成了一次专注学习！", // 这里的文字用于回显
+            "focus_share",
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            false,
+            {
+              totalSeconds: data.totalSeconds,
+              taskName: data.taskName,
+            }
+          );
+
+          // 发送成功后清除
+          localStorage.removeItem("pending_share_message");
+          console.log("✅ 专注分享卡片已发送");
+        } catch (e) {
+          console.error("解析专注分享数据失败", e);
+        }
+      }
+    }, 300); // 👈 这里增加了 300ms 的延迟
+
+    return () => clearTimeout(timer); // 记得清理定时器
+  }, [conversationId]);
 
   const getHeaderStatus = () => {
     if (aiStatus === "thinking") return "对方正在输入...";

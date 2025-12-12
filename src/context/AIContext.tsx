@@ -364,10 +364,43 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (fullContent) {
-        // 处理图片链接
+        // 🔥🔥🔥 第二步：解析暗号 & 生成专注卡片 (新增逻辑) 🔥🔥🔥
+        let processedContent = fullContent;
+        let extraCardMsg: any = null;
+
+        // 正则匹配：:::FOCUS_INVITE|25|5|4|Task:::
+        const inviteRegex = /:::FOCUS_INVITE\|(\d+)\|(\d+)\|(\d+)\|(.*?):::/;
+        const match = fullContent.match(inviteRegex);
+
+        if (match) {
+          // 1. 从文本中移除暗号
+          processedContent = fullContent.replace(match[0], "").trim();
+
+          // 2. 提取参数
+          const [_, duration, breakTime, cycles, taskName] = match;
+
+          // 3. 构建卡片消息对象
+          extraCardMsg = {
+            id: (Date.now() + 999).toString(), // 确保ID唯一
+            role: "assistant",
+            type: "focus_invite", // 关键类型
+            content: "邀请专注", // 兼容旧版显示的文本
+            timestamp: new Date(Date.now() + 600), // 稍微晚一点的时间戳
+            status: "sent",
+            extra: {
+              duration: Number(duration),
+              breakTime: Number(breakTime),
+              cycles: Number(cycles),
+              taskName: taskName,
+            },
+          };
+          console.log("[AIContext] 解析到专注邀请:", extraCardMsg);
+        }
+
+        // 处理图片链接 (原逻辑)
         const rawUrlRegex =
           /(?<!\]\()(https?:\/\/[^\s]+\.(?:jpeg|jpg|gif|png|webp))/gi;
-        let processedContent = fullContent.replace(
+        processedContent = processedContent.replace(
           rawUrlRegex,
           "\n![image]($1)\n"
         );
@@ -393,6 +426,11 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
           content: part,
           timestamp: new Date(Date.now() + i * 500),
         }));
+
+        // 🔥 如果有专注卡片，追加到最后
+        if (extraCardMsg) {
+          finalMsgs.push(extraCardMsg);
+        }
 
         const latestStored = localStorage.getItem(localKey);
         const baseMsgs = latestStored ? JSON.parse(latestStored) : [];

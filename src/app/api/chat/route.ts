@@ -4,13 +4,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // 1. 解构参数，新增了 dynamicContext 用来接收前端计算好的动态信息
     const {
       messages = [],
-      contactInfo = {},
+      contactInfo = {}, // 前端传来的联系人信息，包含 timeAwareness 和 timezone
       config = {},
       triggerType = "reply",
-      dynamicContext = {}, // 🔥 新增：接收天气、表情包、世界书等动态文本
+      dynamicContext = {},
     } = body;
 
     const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
@@ -25,17 +24,42 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing API Key" }, { status: 401 });
     }
 
-    // --- 2. 构建 System Prompt (核心修复部分) ---
+    // --- 🔥🔥🔥 新增：时间感知逻辑开始 🔥🔥🔥 ---
+    let timeContextString = "";
 
-    // (A) 提取基础信息
+    // 检查前端是否开启了“时间感知”开关 (timeAwareness)
+    if (contactInfo.timeAwareness) {
+      const now = new Date();
+      // 使用 Intl.DateTimeFormat 获取包含日期、星期、时间的详细字符串
+      const detailedTime = now.toLocaleString("zh-CN", {
+        timeZone: contactInfo.timezone || "Asia/Shanghai", // 使用设置的时区，默认上海
+        year: "numeric",
+        month: "long", // x月
+        day: "numeric", // x日
+        weekday: "long", // 星期x
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false, // 24小时制
+      });
+
+      // 生成提示词片段
+      timeContextString = `Real-World Time: ${detailedTime}\n[System Note: You have "Time Awareness". Please adjust your greeting, tone, or topic based on the specific time and day above (e.g., say "Good morning/night", comment on it being Monday/Friday, etc.).]`;
+
+      console.log(`[Time Awareness] 注入时间: ${detailedTime}`);
+    } else {
+      // 如果没开启，保留一个基础的简单时间，或者留空
+      const simpleTime = new Date().toLocaleTimeString("zh-CN", {
+        hour12: false,
+      });
+      timeContextString = `Current Time: ${simpleTime}`;
+    }
+    // --- 🔥🔥🔥 时间感知逻辑结束 🔥🔥🔥 ---
+
+    // --- 构建 System Prompt ---
+
     const aiName = contactInfo.aiName || contactInfo.name || "AI";
     const userNickname = contactInfo.myNickname || "User";
-    const currentTime = new Date().toLocaleTimeString("zh-CN", {
-      hour12: false,
-    });
 
-    // (B) 提取新字段 (我们在 ChatListPage 里加的那些)
-    // 如果没有 description，就回退使用 old persona
     const charIdentity =
       contactInfo.description ||
       contactInfo.aiPersona ||
@@ -44,7 +68,6 @@ export async function POST(request: NextRequest) {
     const charStyle = contactInfo.stylePreset || "";
     const charExamples = contactInfo.exampleDialogue || "";
 
-    // (C) 提取动态环境 (来自前端 AIContext)
     const {
       weatherInfo = "",
       worldBookContent = "",
@@ -52,12 +75,11 @@ export async function POST(request: NextRequest) {
       currentStyle = "",
     } = dynamicContext;
 
-    // (D) 🔥🔥🔥 核心：分层构建 System Prompt 🔥🔥🔥
-    // 使用 XML 标签隔离语义，防止 AI 混淆“我是谁”和“我该怎么说话”
+    // 将 timeContextString 插入到 system_instruction 中
     let systemPrompt = `
 <system_instruction>
 You are a roleplay engine. Do not act as an AI assistant.
-Current Time: ${currentTime}
+${timeContextString}
 User's Name: ${userNickname}
 ${weatherInfo}
 </system_instruction>
@@ -86,10 +108,24 @@ ${stickerPrompt}
 ${charExamples}
 </dialogue_examples>
 
+<special_functions>
+[Special Function: Focus Invitation]
+If you think the user needs to study, work, or focus (e.g., they say "I need to work", "go away I'm busy", or you want to encourage them to start working), you MUST append a special code at the end of your response.
+Format: :::FOCUS_INVITE|duration|break|cycles|TaskName:::
+- duration: work time in minutes (e.g., 25)
+- break: break time in minutes (e.g., 5)
+- cycles: number of cycles (e.g., 4)
+- TaskName: short description (e.g., Reading, Coding, Homework)
+
+Example:
+User: "我得去写作业了。"
+You: "好的，加油哦！等你写完我们再聊。||:::FOCUS_INVITE|25|5|4|写作业:::"
+</special_functions>
+
 <trigger_instruction>
 `;
 
-    // (E) 追加触发器指令
+    // (E) 追加触发器指令 (保持不变)
     if (triggerType === "active_idle") {
       systemPrompt += `
 [Instruction]: 用户很久没说话了。请回顾历史记录：
@@ -107,10 +143,10 @@ ${charExamples}
 
     systemPrompt += `\n</trigger_instruction>`;
 
-    // 3. 清洗历史消息
+    // 3. 清洗历史消息 (保持不变)
     const validMessages = Array.isArray(messages)
       ? messages
-          .slice(-30) // 稍微增加上下文长度
+          .slice(-30)
           .filter(
             (m: any) =>
               m &&
@@ -124,7 +160,7 @@ ${charExamples}
           }))
       : [];
 
-    // 4. 调用 API
+    // 4. 调用 API (保持不变)
     const baseUrl = proxyUrl.endsWith("/v1") ? proxyUrl : `${proxyUrl}/v1`;
     const fetchUrl = `${baseUrl}/chat/completions`;
 
@@ -141,10 +177,9 @@ ${charExamples}
       body: JSON.stringify({
         model: model,
         stream: true,
-        // 这里把精心构建的 systemPrompt 放在最前面
         messages: [{ role: "system", content: systemPrompt }, ...validMessages],
-        temperature: 0.9, // 稍微提高一点创造力
-        presence_penalty: 0.4, // 增加话题丰富度
+        temperature: 0.9,
+        presence_penalty: 0.4,
       }),
     });
 

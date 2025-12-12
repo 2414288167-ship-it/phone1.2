@@ -1,3 +1,4 @@
+"use client";
 import React, { useState, useRef, useEffect } from "react";
 import {
   Trash2,
@@ -12,32 +13,145 @@ import {
   Check,
   CheckSquare,
   ImageOff,
-  Music, // 🔥 新增：音乐图标
-  CheckCircle2, // 🔥 新增：选中图标
+  Timer,
+  Trophy,
+  ArrowRight,
+  PlayCircle,
+  Music,
+  CheckCircle2,
 } from "lucide-react";
+import Link from "next/link";
 
+// --- 🔥🔥🔥 FocusCard 组件定义 🔥🔥🔥 ---
+interface FocusCardProps {
+  type: "invite" | "share";
+  duration?: number;
+  taskName?: string;
+  cycles?: number;
+  breakTime?: number;
+  isSelf?: boolean;
+}
+
+const FocusCard = ({
+  type,
+  duration = 25,
+  taskName = "未命名任务",
+  cycles = 4,
+  breakTime = 5,
+  isSelf,
+}: FocusCardProps) => {
+  const isInvite = type === "invite";
+  const inviteLink = `/focus?auto=1&work=${duration}&break=${breakTime}&cycles=${cycles}&task=${encodeURIComponent(
+    taskName || ""
+  )}`;
+  const shareLink = "/focus";
+
+  const formatShareTime = (seconds: number) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h > 0 && m > 0) return `${h}小时${m}分钟`;
+    if (h > 0) return `${h}小时`;
+    return `${m}分钟`;
+  };
+
+  return (
+    <Link
+      href={isInvite ? inviteLink : shareLink}
+      className="flex flex-col items-end group cursor-pointer"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="bg-white rounded-xl p-3 shadow-sm border border-gray-200 w-64 active:scale-95 transition-transform overflow-hidden relative">
+        <div className="flex items-start gap-3 mb-3 relative z-10">
+          <div
+            className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 border border-gray-50 
+            ${
+              isInvite
+                ? "bg-rose-100 text-rose-500"
+                : "bg-blue-100 text-blue-500"
+            }`}
+          >
+            {isInvite ? (
+              <Timer className="w-6 h-6" />
+            ) : (
+              <Trophy className="w-6 h-6" />
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[14px] text-gray-900 font-bold leading-tight mb-1 line-clamp-2">
+              {isInvite ? "该去专注学习啦！" : "我完成了专注挑战！"}
+            </div>
+            <div className="text-[11px] text-gray-500 truncate">
+              {isInvite
+                ? `建议专注 ${duration}min × ${cycles}轮`
+                : `共专注 ${formatShareTime(duration || 0)}`}
+            </div>
+            {!isInvite && taskName && (
+              <div className="text-[10px] text-gray-400 truncate mt-0.5">
+                任务：{taskName}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="border-t border-gray-100 pt-2 flex items-center justify-between text-[10px] text-gray-400 relative z-10">
+          <div className="flex items-center gap-1.5">
+            <div
+              className={`p-0.5 rounded-full ${
+                isInvite ? "bg-rose-50" : "bg-blue-50"
+              }`}
+            >
+              <div
+                className={`w-3 h-3 rounded-full flex items-center justify-center font-bold text-[8px] ${
+                  isInvite ? "text-rose-500" : "text-blue-500"
+                }`}
+              >
+                M
+              </div>
+            </div>
+            Meow Focus
+          </div>
+          {isInvite && (
+            <div className="flex items-center gap-1 text-rose-500 font-bold bg-rose-50 px-2 py-0.5 rounded-full">
+              Start <PlayCircle className="w-3 h-3" />
+            </div>
+          )}
+        </div>
+        <div
+          className={`absolute -bottom-6 -right-6 w-20 h-20 rounded-full blur-xl pointer-events-none opacity-20
+          ${isInvite ? "bg-rose-500" : "bg-blue-500"}`}
+        ></div>
+      </div>
+    </Link>
+  );
+};
+
+// --- 类型定义 ---
 export interface Message {
   id: string;
   role: string;
   content: string;
   timestamp: Date | string;
-  // 🔥 新增 system_notice 类型
   type?:
     | "text"
     | "image"
     | "audio"
     | "sticker"
     | "music_invite"
-    | "system_notice";
+    | "system_notice"
+    | "focus_invite"
+    | "focus_share";
   duration?: number;
   audioUrl?: string;
   status?: "sending" | "sent" | "error";
-  alt?: string; // 用于存储音乐封面
+  alt?: string;
   extra?: {
-    // 🔥 用于存储额外状态 (如已接受邀请)
     songTitle?: string;
     songArtist?: string;
     accepted?: boolean;
+    duration?: number;
+    breakTime?: number;
+    cycles?: number;
+    taskName?: string;
+    totalSeconds?: number;
   };
 }
 
@@ -58,7 +172,6 @@ interface MessageListProps {
   onEnterSelectionMode?: (initialMsgId?: string) => void;
 }
 
-// Markdown 图片提取正则
 const extractMarkdownImage = (content: string) => {
   const match = content.match(/^\s*!?\[(.*?)\]\((.*?)\)\s*$/);
   if (match) {
@@ -67,7 +180,6 @@ const extractMarkdownImage = (content: string) => {
   return null;
 };
 
-// 文本渲染组件 (支持混合图片)
 const RenderContentWithImages = ({ content }: { content: string }) => {
   const parts = content.split(/(!?\[.*?\]\(.*?\))/g);
   return (
@@ -95,12 +207,32 @@ const RenderContentWithImages = ({ content }: { content: string }) => {
   );
 };
 
+// 🔥🔥🔥 新增：解析旁白和对话的函数 🔥🔥🔥
+// 匹配中文括号（）或英文括号()中的内容
+const splitNarrativeContent = (text: string) => {
+  // 正则：捕获带括号的内容 (包括全角和半角)
+  // 1. ([（\(]) -> 开始括号
+  // 2. [\s\S]*? -> 括号内的内容 (非贪婪)
+  // 3. ([）\)]) -> 结束括号
+  const regex = /([（\(][\s\S]*?[）\)])/g;
+  const parts = text.split(regex).filter((p) => p.trim() !== "");
+
+  return parts.map((part) => {
+    const isNarration =
+      /^([（\(])/.test(part.trim()) && /([）\)])$/.test(part.trim());
+    return {
+      text: part,
+      isNarration,
+    };
+  });
+};
+
 export default function MessageList({
   messages,
   isLoading,
   contactAvatar,
   myAvatar,
-  contactInfo, // 🔥 需要用到这个显示昵称
+  contactInfo,
   onDeleteMessage,
   onResendMessage,
   onContinueMessage,
@@ -207,8 +339,7 @@ export default function MessageList({
 
   return (
     <div className="flex flex-col gap-3 py-4" ref={scrollRef}>
-      {messages.map((msg, index) => {
-        // 🔥🔥🔥 核心新增：如果是系统提示 (灰色条) 🔥🔥🔥
+      {messages.map((msg) => {
         if (msg.type === "system_notice") {
           return (
             <div
@@ -224,7 +355,6 @@ export default function MessageList({
 
         const isUser = msg.role === "user";
         const isSelected = selectedIds?.has(msg.id);
-
         const markdownImage =
           !msg.type || msg.type === "text"
             ? extractMarkdownImage(msg.content)
@@ -232,14 +362,32 @@ export default function MessageList({
 
         const isImageFailed = failedImages.has(msg.id);
         const isStickerMode = msg.type === "sticker" || !!markdownImage;
-        const isInviteMode = msg.type === "music_invite"; // 🔥 邀请卡片模式
+        const isInviteMode = msg.type === "music_invite";
+        const isFocusMode =
+          msg.type === "focus_invite" || msg.type === "focus_share";
 
-        // 气泡样式处理
+        // 🔥🔥🔥 核心渲染逻辑：判断是否启用旁白模式 🔥🔥🔥
+        const isAsideMode =
+          contactInfo?.asideMode && // 在设置里开启了旁白模式
+          !isUser && // 只有 AI 的消息生效
+          msg.type === "text" &&
+          !isStickerMode &&
+          !isInviteMode &&
+          !isFocusMode;
+
+        // 如果开启了旁白模式，气泡样式需要在内部单独处理，外部容器只负责布局
         let bubbleClass = isUser
           ? "bg-[#95ec69] text-black rounded-[6px]"
           : "bg-white text-black rounded-[6px] border border-gray-100";
 
-        if (isStickerMode || msg.type === "image" || isInviteMode) {
+        // 特殊类型的透明气泡
+        if (
+          isStickerMode ||
+          msg.type === "image" ||
+          isInviteMode ||
+          isFocusMode ||
+          isAsideMode // 🔥 旁白模式下，父容器透明，样式在子元素里
+        ) {
           bubbleClass = "bg-transparent shadow-none p-0 border-none";
         }
 
@@ -250,7 +398,6 @@ export default function MessageList({
               isUser ? "justify-end" : "justify-start"
             }`}
           >
-            {/* 多选模式勾选框 (放在最左边) */}
             {isSelectionMode && (
               <div
                 className="mr-3 shrink-0 cursor-pointer animate-in fade-in zoom-in duration-200 self-center"
@@ -266,7 +413,6 @@ export default function MessageList({
               </div>
             )}
 
-            {/* AI 头像 (仅非用户消息显示) */}
             {!isUser && (
               <img
                 src={contactAvatar}
@@ -279,7 +425,6 @@ export default function MessageList({
                 isUser ? "items-end" : "items-start"
               }`}
             >
-              {/* 昵称显示 (仅 AI 且非用户) */}
               {!isUser && contactInfo?.name && (
                 <span className="text-[10px] text-gray-400 mb-1 ml-1">
                   {contactInfo.name}
@@ -296,127 +441,176 @@ export default function MessageList({
                 }}
                 className={`relative px-3 py-2 text-[15px] leading-relaxed break-words shadow-sm select-text cursor-pointer ${bubbleClass}`}
               >
-                {/* 🔥🔥🔥 情况 0: 音乐邀请卡片 (仿网易云) 🔥🔥🔥 */}
-                {isInviteMode && (
-                  <div className="flex flex-col items-end">
-                    {/* 卡片主体 */}
-                    <div className="bg-white rounded-xl p-3 shadow-sm border border-gray-200 w-60 active:scale-95 transition-transform overflow-hidden relative">
-                      <div className="flex items-start gap-3 mb-3 relative z-10">
-                        <div className="w-12 h-12 bg-gray-100 rounded-md overflow-hidden shrink-0 border border-gray-100">
-                          <img
-                            src={
-                              msg.alt ||
-                              "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=500&q=80"
-                            }
-                            className="w-full h-full object-cover"
-                          />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-[14px] text-gray-900 font-medium leading-tight mb-1 line-clamp-2">
-                            我的耳机分你一半，和我一起听歌吧～
+                {/* 🔥🔥🔥 分支 1：旁白模式渲染 (Novel Style) 🔥🔥🔥 */}
+                {isAsideMode ? (
+                  <div className="flex flex-col items-start w-full gap-2">
+                    {splitNarrativeContent(msg.content).map((part, idx) => {
+                      if (part.isNarration) {
+                        // 动作/旁白框样式：米色背景，类似便签
+                        return (
+                          <div
+                            key={idx}
+                            className="bg-[#fffdf5] text-[#7d7164] px-3 py-2 rounded-lg text-sm border border-[#e8e2d2] shadow-sm w-full font-normal italic"
+                          >
+                            {part.text.replace(/[（）()]/g, "")}{" "}
+                            {/* 去掉括号显示 */}
                           </div>
-                          <div className="text-[10px] text-gray-400 truncate">
-                            by {isUser ? "我" : contactInfo?.name || "AI"}
+                        );
+                      } else {
+                        // 对话气泡样式：标准白底黑字
+                        return (
+                          <div
+                            key={idx}
+                            className="bg-white text-black px-3 py-2 rounded-[6px] border border-gray-100 shadow-sm"
+                          >
+                            <RenderContentWithImages content={part.text} />
                           </div>
-                        </div>
-                      </div>
-                      <div className="border-t border-gray-100 pt-2 flex items-center gap-1.5 text-[10px] text-gray-400 relative z-10">
-                        <div className="bg-red-50 p-0.5 rounded-full">
-                          <Music className="w-3 h-3 text-red-500" />
-                        </div>
-                        网易云音乐
-                      </div>
-                      {/* 装饰背景圆 */}
-                      <div className="absolute -bottom-6 -right-6 w-20 h-20 bg-red-500/5 rounded-full blur-xl pointer-events-none"></div>
-                    </div>
+                        );
+                      }
+                    })}
+                  </div>
+                ) : (
+                  /* 🔥🔥🔥 分支 2：普通模式渲染 (Standard Bubble) 🔥🔥🔥 */
+                  <>
+                    {msg.type === "focus_invite" && (
+                      <FocusCard
+                        type="invite"
+                        duration={msg.extra?.duration}
+                        breakTime={msg.extra?.breakTime}
+                        cycles={msg.extra?.cycles}
+                        taskName={msg.extra?.taskName}
+                      />
+                    )}
 
-                    {/* 🔥 同意后的小灰字提示 (暂时保留以兼容旧数据，新版用 system_notice) 🔥 */}
-                    {msg.extra?.accepted && (
-                      <div className="mt-1.5 text-[10px] text-white/60 bg-black/20 px-2 py-0.5 rounded-full flex items-center gap-1 animate-in fade-in slide-in-from-top-1 backdrop-blur-sm self-center">
-                        <CheckCircle2 className="w-2.5 h-2.5" />
-                        {(contactInfo?.name || "对方") + " 已同意听歌"}
+                    {msg.type === "focus_share" && (
+                      <FocusCard
+                        type="share"
+                        duration={msg.extra?.totalSeconds}
+                        taskName={msg.extra?.taskName}
+                        isSelf={true}
+                      />
+                    )}
+
+                    {isInviteMode && (
+                      <div className="flex flex-col items-end">
+                        <div className="bg-white rounded-xl p-3 shadow-sm border border-gray-200 w-60 active:scale-95 transition-transform overflow-hidden relative">
+                          <div className="flex items-start gap-3 mb-3 relative z-10">
+                            <div className="w-12 h-12 bg-gray-100 rounded-md overflow-hidden shrink-0 border border-gray-100">
+                              <img
+                                src={
+                                  msg.alt ||
+                                  "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=500&q=80"
+                                }
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[14px] text-gray-900 font-medium leading-tight mb-1 line-clamp-2">
+                                我的耳机分你一半，和我一起听歌吧～
+                              </div>
+                              <div className="text-[10px] text-gray-400 truncate">
+                                by {isUser ? "我" : contactInfo?.name || "AI"}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="border-t border-gray-100 pt-2 flex items-center gap-1.5 text-[10px] text-gray-400 relative z-10">
+                            <div className="bg-red-50 p-0.5 rounded-full">
+                              <Music className="w-3 h-3 text-red-500" />
+                            </div>
+                            网易云音乐
+                          </div>
+                          <div className="absolute -bottom-6 -right-6 w-20 h-20 bg-red-500/5 rounded-full blur-xl pointer-events-none"></div>
+                        </div>
+                        {msg.extra?.accepted && (
+                          <div className="mt-1.5 text-[10px] text-white/60 bg-black/20 px-2 py-0.5 rounded-full flex items-center gap-1 animate-in fade-in slide-in-from-top-1 backdrop-blur-sm self-center">
+                            <CheckCircle2 className="w-2.5 h-2.5" />
+                            {(contactInfo?.name || "对方") + " 已同意听歌"}
+                          </div>
+                        )}
                       </div>
                     )}
-                  </div>
-                )}
 
-                {/* 情况 1: Markdown 图片 */}
-                {markdownImage && (
-                  <>
-                    <img
-                      src={markdownImage.src}
-                      alt={markdownImage.alt}
-                      className="w-32 h-32 object-contain cursor-zoom-in bg-white rounded-lg"
-                      style={{ display: isImageFailed ? "none" : "block" }}
-                      onClick={() =>
-                        !isSelectionMode && setPreviewImage(markdownImage.src)
-                      }
-                      onError={() => {
-                        setFailedImages((prev) => new Set(prev).add(msg.id));
-                      }}
-                    />
-                    {isImageFailed && (
-                      <div className="w-32 h-32 bg-gray-100 rounded-lg flex flex-col items-center justify-center text-gray-400 border border-gray-200 border-dashed">
-                        <ImageOff className="w-8 h-8 mb-2 opacity-50" />
-                        <span className="text-[10px] opacity-70">图片失效</span>
+                    {markdownImage && (
+                      <>
+                        <img
+                          src={markdownImage.src}
+                          alt={markdownImage.alt}
+                          className="w-32 h-32 object-contain cursor-zoom-in bg-white rounded-lg"
+                          style={{ display: isImageFailed ? "none" : "block" }}
+                          onClick={() =>
+                            !isSelectionMode &&
+                            setPreviewImage(markdownImage.src)
+                          }
+                          onError={() => {
+                            setFailedImages((prev) =>
+                              new Set(prev).add(msg.id)
+                            );
+                          }}
+                        />
+                        {isImageFailed && (
+                          <div className="w-32 h-32 bg-gray-100 rounded-lg flex flex-col items-center justify-center text-gray-400 border border-gray-200 border-dashed">
+                            <ImageOff className="w-8 h-8 mb-2 opacity-50" />
+                            <span className="text-[10px] opacity-70">
+                              图片失效
+                            </span>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {msg.type === "image" && (
+                      <img
+                        src={msg.content}
+                        alt="img"
+                        onClick={() =>
+                          !isSelectionMode && setPreviewImage(msg.content)
+                        }
+                        className="max-w-[200px] max-h-[200px] rounded-[6px] cursor-zoom-in bg-white border border-gray-200"
+                      />
+                    )}
+
+                    {msg.type === "sticker" && (
+                      <img
+                        src={msg.content || msg.audioUrl}
+                        className="w-32 h-32 object-contain"
+                        alt="sticker"
+                      />
+                    )}
+
+                    {!isStickerMode &&
+                      !isInviteMode &&
+                      !isFocusMode &&
+                      msg.type !== "image" &&
+                      msg.type !== "audio" && (
+                        <RenderContentWithImages content={msg.content || ""} />
+                      )}
+
+                    {msg.type === "audio" && (
+                      <div
+                        onClick={() =>
+                          !isSelectionMode &&
+                          msg.audioUrl &&
+                          playAudio(msg.audioUrl, msg.id)
+                        }
+                        className="flex items-center gap-2 min-w-[80px]"
+                      >
+                        <Volume2
+                          className={`w-4 h-4 ${
+                            playingAudioId === msg.id
+                              ? "animate-pulse text-green-700"
+                              : ""
+                          }`}
+                        />
+                        <span>
+                          {msg.duration ? `${msg.duration}"` : "语音"}
+                        </span>
                       </div>
                     )}
                   </>
                 )}
-
-                {/* 情况 2: 原生图片 */}
-                {msg.type === "image" && (
-                  <img
-                    src={msg.content}
-                    alt="img"
-                    onClick={() =>
-                      !isSelectionMode && setPreviewImage(msg.content)
-                    }
-                    className="max-w-[200px] max-h-[200px] rounded-[6px] cursor-zoom-in bg-white border border-gray-200"
-                  />
-                )}
-
-                {/* 情况 3: 贴纸 */}
-                {msg.type === "sticker" && (
-                  <img
-                    src={msg.content || msg.audioUrl}
-                    className="w-32 h-32 object-contain"
-                    alt="sticker"
-                  />
-                )}
-
-                {/* 情况 4: 普通文本 */}
-                {!isStickerMode &&
-                  !isInviteMode &&
-                  msg.type !== "image" &&
-                  msg.type !== "audio" && (
-                    <RenderContentWithImages content={msg.content || ""} />
-                  )}
-
-                {/* 情况 5: 语音消息 */}
-                {msg.type === "audio" && (
-                  <div
-                    onClick={() =>
-                      !isSelectionMode &&
-                      msg.audioUrl &&
-                      playAudio(msg.audioUrl, msg.id)
-                    }
-                    className="flex items-center gap-2 min-w-[80px]"
-                  >
-                    <Volume2
-                      className={`w-4 h-4 ${
-                        playingAudioId === msg.id
-                          ? "animate-pulse text-green-700"
-                          : ""
-                      }`}
-                    />
-                    <span>{msg.duration ? `${msg.duration}"` : "语音"}</span>
-                  </div>
-                )}
               </div>
             </div>
 
-            {/* 用户头像 (仅用户消息显示) */}
             {isUser && (
               <div className="ml-2 shrink-0">
                 {myAvatar ? (
@@ -433,7 +627,6 @@ export default function MessageList({
         );
       })}
 
-      {/* Loading 状态 */}
       {isLoading && (
         <div className="flex w-full mb-2 justify-start items-start">
           <img
@@ -450,7 +643,6 @@ export default function MessageList({
         </div>
       )}
 
-      {/* 长按菜单 (保持你原有的) */}
       {menuVisible && selectedMsg && (
         <>
           <div
@@ -473,7 +665,6 @@ export default function MessageList({
                   label="收藏"
                   onClick={() => setMenuVisible(false)}
                 />
-
                 {selectedMsg.role !== "user" ? (
                   <MenuItem
                     icon={RefreshCw}
@@ -493,7 +684,6 @@ export default function MessageList({
                     }}
                   />
                 )}
-
                 <MenuItem
                   icon={Quote}
                   label="引用"
@@ -516,7 +706,6 @@ export default function MessageList({
                       onEnterSelectionMode(selectedMsg.id);
                   }}
                 />
-
                 {selectedMsg.role !== "user" && (
                   <MenuItem
                     icon={Play}
@@ -527,11 +716,12 @@ export default function MessageList({
                     }}
                   />
                 )}
-
                 {selectedMsg.type !== "image" &&
                   selectedMsg.type !== "sticker" &&
                   selectedMsg.type !== "music_invite" &&
-                  selectedMsg.type !== "system_notice" && // 🔥 排除系统消息
+                  selectedMsg.type !== "focus_invite" &&
+                  selectedMsg.type !== "focus_share" &&
+                  selectedMsg.type !== "system_notice" &&
                   !extractMarkdownImage(selectedMsg.content) && (
                     <MenuItem
                       icon={isCopied ? Check : Copy}
@@ -556,7 +746,6 @@ export default function MessageList({
         </>
       )}
 
-      {/* 图片预览 */}
       {previewImage && (
         <div
           className="fixed inset-0 z-[60] bg-black/95 flex items-center justify-center"
