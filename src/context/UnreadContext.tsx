@@ -5,6 +5,7 @@ import React, {
   useState,
   useEffect,
   useRef,
+  useCallback,
 } from "react";
 import { usePathname } from "next/navigation";
 
@@ -40,6 +41,53 @@ interface UnreadContextType {
 
 const UnreadContext = createContext<UnreadContextType | null>(null);
 
+// --- 🔥 PWA 通知辅助函数 (新增) ---
+const sendMobileNotification = async (
+  title: string,
+  body: string,
+  tag: string
+) => {
+  if (typeof window === "undefined") return;
+
+  // 1. 尝试请求权限
+  if (Notification.permission === "default") {
+    try {
+      await Notification.requestPermission();
+    } catch (e) {
+      console.warn("请求通知权限失败:", e);
+    }
+  }
+
+  if (Notification.permission !== "granted") return;
+
+  try {
+    // 2. 优先尝试 Service Worker (手机端必备)
+    if ("serviceWorker" in navigator) {
+      const registration = await navigator.serviceWorker.ready;
+      if (registration && registration.showNotification) {
+        await registration.showNotification(title, {
+          body: body,
+          icon: "/icon.png", // 确保 public 目录下有这个图标，没有也不影响
+          badge: "/icon.png",
+          vibrate: [200, 100, 200],
+          tag: tag, // 防止刷屏，相同tag覆盖
+          renotify: true, // 新消息重新震动
+        } as any);
+        return; // 发送成功，直接返回
+      }
+    }
+  } catch (e) {
+    console.warn("[Unread] SW通知发送失败，尝试降级:", e);
+  }
+
+  // 3. 降级方案 (PC端 / SW不可用时)
+  try {
+    new Notification(title, { body, tag, silent: true }); // silent: true 因为我们要手动播声音
+  } catch (e) {
+    console.error("[Unread] 所有通知方式均失败:", e);
+  }
+};
+
 export function UnreadProvider({ children }: { children: React.ReactNode }) {
   const [unreadCounts, setUnreadCounts] = useState<{ [key: string]: number }>(
     {}
@@ -56,7 +104,7 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
     pathnameRef.current = pathname;
   }, [pathname]);
 
-  // --- 初始化加载 (修复逻辑) ---
+  // --- 初始化加载 ---
   useEffect(() => {
     if (typeof window !== "undefined") {
       // 1. 加载未读数
@@ -67,7 +115,7 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
         } catch (e) {}
       }
 
-      // 2. 加载铃声和当前选中项 (在一个流程里处理，防止状态不同步)
+      // 2. 加载铃声和当前选中项
       try {
         const savedRingtonesStr = localStorage.getItem("custom_ringtones");
         const savedCurrentId = localStorage.getItem("current_ringtone_id");
@@ -83,7 +131,7 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
 
         setRingtones(loadedRingtones);
 
-        // 检查保存的 ID 是否依然有效，如果无效则回退到 default
+        // 检查保存的 ID 是否依然有效
         if (savedCurrentId) {
           const exists = loadedRingtones.some((r) => r.id === savedCurrentId);
           if (exists) {
@@ -97,8 +145,9 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
         console.error("初始化铃声失败", e);
       }
 
+      // 请求通知权限
       if ("Notification" in window && Notification.permission === "default") {
-        Notification.requestPermission();
+        Notification.requestPermission().catch(() => {});
       }
     }
   }, []);
@@ -108,13 +157,10 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem("unread_counts", JSON.stringify(unreadCounts));
   }, [unreadCounts]);
 
-  // ❌ 核心修改：绝对不要在这里写 useEffect(() => save(currentRingtoneId))，会导致刷新页面时重置
-
   const totalUnread = Object.values(unreadCounts).reduce((a, b) => a + b, 0);
 
   // --- 铃声操作 ---
   const addRingtone = async (name: string, file: File) => {
-    // 限制文件大小 (例如 3MB)
     if (file.size > 3 * 1024 * 1024) {
       alert(
         "铃声文件过大(超过3MB)，无法保存到浏览器缓存中，请使用更小的文件。"
@@ -133,17 +179,13 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
         };
 
         try {
-          // 1. 先尝试保存到 localStorage，如果满了会报错
           const currentCustom = JSON.parse(
             localStorage.getItem("custom_ringtones") || "[]"
           );
           const newCustom = [...currentCustom, newRingtone];
           localStorage.setItem("custom_ringtones", JSON.stringify(newCustom));
 
-          // 2. 如果保存成功，再更新 React 状态
           setRingtones((prev) => [...prev, newRingtone]);
-
-          // 3. 自动选中并保存 ID
           selectRingtone(newRingtone.id);
 
           resolve();
@@ -162,14 +204,12 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
 
   const selectRingtone = (id: string) => {
     setCurrentRingtoneId(id);
-    // 🔥 手动保存，确保安全
     localStorage.setItem("current_ringtone_id", id);
   };
 
   const deleteRingtone = (id: string) => {
     if (id === "default") return;
 
-    // 1. 更新 localStorage
     try {
       const currentCustom = JSON.parse(
         localStorage.getItem("custom_ringtones") || "[]"
@@ -178,63 +218,74 @@ export function UnreadProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem("custom_ringtones", JSON.stringify(newCustom));
     } catch (e) {}
 
-    // 2. 更新状态
     setRingtones((prev) => prev.filter((r) => r.id !== id));
 
-    // 3. 如果删的是当前选中的，回退到默认
     if (currentRingtoneId === id) {
       selectRingtone("default");
     }
   };
 
-  const playCurrentRingtone = () => {
+  const playCurrentRingtone = useCallback(() => {
     try {
+      // 这里的 ringtones 和 currentRingtoneId 可能闭包过时，
+      // 但对于简单的播放功能，直接从 state 读通常没问题。
+      // 为了安全，我们再次尝试从 localStorage 兜底读一下 ID
+      let targetId = currentRingtoneId;
+      if (typeof window !== "undefined") {
+        targetId = localStorage.getItem("current_ringtone_id") || "default";
+      }
+
       const ringtone =
-        ringtones.find((r) => r.id === currentRingtoneId) || DEFAULT_RINGTONE;
+        ringtones.find((r) => r.id === targetId) || DEFAULT_RINGTONE;
+
       if (ringtone && ringtone.url) {
         const audio = new Audio(ringtone.url);
         audio.volume = 0.8;
-        audio.play().catch((e) => console.error("播放失败", e));
-      }
-    } catch (e) {}
-  };
-
-  const incrementUnread = (id: string, content: string, count: number = 1) => {
-    const chatId = String(id);
-    const currentPath = pathnameRef.current;
-
-    if (currentPath === `/chat/${chatId}`) {
-      console.log(`[Unread] 正处于聊天窗口 ${chatId}，不显示红点`);
-      return;
-    }
-
-    setUnreadCounts((prev) => {
-      const newCount = (prev[chatId] || 0) + count;
-      return { ...prev, [chatId]: newCount };
-    });
-
-    try {
-      const contactsStr = localStorage.getItem("contacts");
-      if (contactsStr) {
-        const contacts = JSON.parse(contactsStr);
-        const contact = contacts.find((c: any) => String(c.id) === chatId);
-        const isAlertOn = contact ? contact.alertEnabled !== false : true;
-        if (isAlertOn) {
-          playCurrentRingtone();
-        }
+        // 手机上必须用户交互才能播放音频，这在后台可能被阻塞
+        // 加个 catch 防止红屏
+        audio.play().catch((e) => console.warn("后台播放音频被拦截", e));
       }
     } catch (e) {
-      console.error(e);
+      console.warn("播放逻辑错误", e);
     }
+  }, [ringtones, currentRingtoneId]);
 
-    if (
-      typeof window !== "undefined" &&
-      "Notification" in window &&
-      Notification.permission === "granted"
-    ) {
-      new Notification("新消息", { body: content, tag: chatId, silent: true });
-    }
-  };
+  // --- 核心方法 ---
+  const incrementUnread = useCallback(
+    (id: string, content: string, count: number = 1) => {
+      const chatId = String(id);
+      const currentPath = pathnameRef.current;
+
+      if (currentPath === `/chat/${chatId}`) {
+        console.log(`[Unread] 正处于聊天窗口 ${chatId}，不显示红点`);
+        return;
+      }
+
+      setUnreadCounts((prev) => {
+        const newCount = (prev[chatId] || 0) + count;
+        return { ...prev, [chatId]: newCount };
+      });
+
+      // 播放声音 (带容错)
+      try {
+        const contactsStr = localStorage.getItem("contacts");
+        if (contactsStr) {
+          const contacts = JSON.parse(contactsStr);
+          const contact = contacts.find((c: any) => String(c.id) === chatId);
+          const isAlertOn = contact ? contact.alertEnabled !== false : true;
+          if (isAlertOn) {
+            playCurrentRingtone();
+          }
+        }
+      } catch (e) {
+        console.error("读取联系人设置失败", e);
+      }
+
+      // 🔥 发送通知 (使用增强版函数，兼容手机)
+      sendMobileNotification("新消息", content, chatId);
+    },
+    [playCurrentRingtone]
+  );
 
   const clearUnread = (id: string) => {
     const chatId = String(id);

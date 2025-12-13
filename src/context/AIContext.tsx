@@ -296,7 +296,11 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
       const finalTemp = Number(localStorage.getItem("ai_temperature")) || 0.7;
       const finalPenalty =
         Number(localStorage.getItem("ai_presence_penalty")) || 0.0;
-
+      console.log("[AIContext] 准备发送请求，检查参数:", {
+        chatId,
+        hasTimeAwareness: contactInfo.timeAwareness, // 👈 检查这个！
+        hasAsideMode: contactInfo.asideMode, // 👈 检查这个！
+      });
       const fetchUrl = "/api/chat";
       const response = await fetch(fetchUrl, {
         method: "POST",

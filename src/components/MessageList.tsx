@@ -15,14 +15,13 @@ import {
   ImageOff,
   Timer,
   Trophy,
-  ArrowRight,
   PlayCircle,
   Music,
   CheckCircle2,
 } from "lucide-react";
 import Link from "next/link";
 
-// --- 🔥🔥🔥 FocusCard 组件定义 🔥🔥🔥 ---
+// --- FocusCard 组件 ---
 interface FocusCardProps {
   type: "invite" | "share";
   duration?: number;
@@ -38,7 +37,6 @@ const FocusCard = ({
   taskName = "未命名任务",
   cycles = 4,
   breakTime = 5,
-  isSelf,
 }: FocusCardProps) => {
   const isInvite = type === "invite";
   const inviteLink = `/focus?auto=1&work=${duration}&break=${breakTime}&cycles=${cycles}&task=${encodeURIComponent(
@@ -124,7 +122,7 @@ const FocusCard = ({
   );
 };
 
-// --- 类型定义 ---
+// --- 🔥🔥🔥 关键修复：添加 export 关键字 🔥🔥🔥 ---
 export interface Message {
   id: string;
   role: string;
@@ -155,6 +153,7 @@ export interface Message {
   };
 }
 
+// --- 🔥🔥🔥 关键修复：添加多选相关的 Props 定义 🔥🔥🔥 ---
 interface MessageListProps {
   messages: Message[];
   isLoading: boolean;
@@ -166,11 +165,15 @@ interface MessageListProps {
   onResendMessage?: (msg: Message) => void;
   onContinueMessage?: (msg: Message) => void;
   onEditMessage?: (msg: Message) => void;
+
+  // 多选相关
   isSelectionMode?: boolean;
   selectedIds?: Set<string>;
   onToggleSelection?: (id: string) => void;
   onEnterSelectionMode?: (initialMsgId?: string) => void;
 }
+
+// --- 辅助函数 ---
 
 const extractMarkdownImage = (content: string) => {
   const match = content.match(/^\s*!?\[(.*?)\]\((.*?)\)\s*$/);
@@ -207,25 +210,24 @@ const RenderContentWithImages = ({ content }: { content: string }) => {
   );
 };
 
-// 🔥🔥🔥 新增：解析旁白和对话的函数 🔥🔥🔥
-// 匹配中文括号（）或英文括号()中的内容
+// 分割逻辑：将文本拆分为 [旁白, 对话, 旁白...]
 const splitNarrativeContent = (text: string) => {
-  // 正则：捕获带括号的内容 (包括全角和半角)
-  // 1. ([（\(]) -> 开始括号
-  // 2. [\s\S]*? -> 括号内的内容 (非贪婪)
-  // 3. ([）\)]) -> 结束括号
+  // 匹配所有括号内容（全角/半角）
   const regex = /([（\(][\s\S]*?[）\)])/g;
   const parts = text.split(regex).filter((p) => p.trim() !== "");
 
   return parts.map((part) => {
-    const isNarration =
-      /^([（\(])/.test(part.trim()) && /([）\)])$/.test(part.trim());
+    const trimmed = part.trim();
+    // 判断是否是旁白
+    const isNarration = /^([（\(])/.test(trimmed) && /([）\)])$/.test(trimmed);
     return {
       text: part,
       isNarration,
     };
   });
 };
+
+// --- 主组件 ---
 
 export default function MessageList({
   messages,
@@ -284,13 +286,8 @@ export default function MessageList({
     let y = e.clientY - menuH - 15;
     let align = "center";
 
-    if (x < 10) {
-      x = 10;
-      align = "left";
-    } else if (x + menuW > screenW - 10) {
-      x = screenW - menuW - 10;
-      align = "right";
-    }
+    if (x < 10) x = 10;
+    else if (x + menuW > screenW - 10) x = screenW - menuW - 10;
     if (y < 50) y = e.clientY + 20;
 
     setMenuPosition({ x, y, align });
@@ -340,6 +337,7 @@ export default function MessageList({
   return (
     <div className="flex flex-col gap-3 py-4" ref={scrollRef}>
       {messages.map((msg) => {
+        // --- 1. 系统通知 ---
         if (msg.type === "system_notice") {
           return (
             <div
@@ -366,263 +364,296 @@ export default function MessageList({
         const isFocusMode =
           msg.type === "focus_invite" || msg.type === "focus_share";
 
-        // 🔥🔥🔥 核心渲染逻辑：判断是否启用旁白模式 🔥🔥🔥
-        const isAsideMode =
-          contactInfo?.asideMode && // 在设置里开启了旁白模式
-          !isUser && // 只有 AI 的消息生效
-          msg.type === "text" &&
+        // --- 2. 旁白模式检测 ---
+        // 只要不是用户发的，不是特殊卡片，且包含括号，就尝试拆分
+        const hasParentheses =
+          msg.content &&
+          /[（\(]/.test(msg.content) &&
+          /[）\)]/.test(msg.content);
+
+        const shouldParseNarrative =
+          (contactInfo?.asideMode || hasParentheses) &&
+          !isUser &&
+          (!msg.type || msg.type === "text") &&
           !isStickerMode &&
           !isInviteMode &&
           !isFocusMode;
 
-        // 如果开启了旁白模式，气泡样式需要在内部单独处理，外部容器只负责布局
-        let bubbleClass = isUser
-          ? "bg-[#95ec69] text-black rounded-[6px]"
-          : "bg-white text-black rounded-[6px] border border-gray-100";
+        // --- 3. 准备消息部分 ---
+        // 如果是旁白模式，拆分为数组；否则整个作为一个“文本”部分
+        const messageParts = shouldParseNarrative
+          ? splitNarrativeContent(msg.content)
+          : [{ text: msg.content, isNarration: false }];
 
-        // 特殊类型的透明气泡
-        if (
-          isStickerMode ||
-          msg.type === "image" ||
-          isInviteMode ||
-          isFocusMode ||
-          isAsideMode // 🔥 旁白模式下，父容器透明，样式在子元素里
-        ) {
-          bubbleClass = "bg-transparent shadow-none p-0 border-none";
-        }
-
+        // --- 4. 渲染逻辑 (关键修改) ---
+        // 我们返回一个容器，里面可能包含多个“块”（有的居中，有的带头像）
         return (
-          <div
-            key={msg.id}
-            className={`flex w-full mb-2 items-start ${
-              isUser ? "justify-end" : "justify-start"
-            }`}
-          >
-            {isSelectionMode && (
-              <div
-                className="mr-3 shrink-0 cursor-pointer animate-in fade-in zoom-in duration-200 self-center"
-                onClick={() => onToggleSelection && onToggleSelection(msg.id)}
-              >
-                {isSelected ? (
-                  <div className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center text-white">
-                    <Check className="w-3.5 h-3.5" />
+          <div key={msg.id} className="flex flex-col gap-2 w-full mb-2">
+            {messageParts.map((part, index) => {
+              // ------------------------
+              // 场景 A: 纯旁白块 (图3效果)
+              // ------------------------
+              if (part.isNarration) {
+                // 去除括号用于显示（可选，如果想保留括号则去掉 .replace）
+                const displayContent = part.text.replace(/[（）()]/g, "");
+                if (!displayContent.trim()) return null;
+
+                return (
+                  <div
+                    key={`${msg.id}-narration-${index}`}
+                    className="flex justify-center w-full px-4 animate-in fade-in slide-in-from-bottom-2 duration-500"
+                    onClick={() => {
+                      // 允许旁白也可以被点击进入多选模式，或者不做操作
+                      if (isSelectionMode && onToggleSelection)
+                        onToggleSelection(msg.id);
+                    }}
+                  >
+                    <div className="bg-[#f5f5f5] text-[#666] text-[13px] px-5 py-3 rounded-2xl shadow-sm max-w-[85%] text-left leading-relaxed border border-[#eeeeee]">
+                      <span className="italic opacity-90">
+                        {displayContent}
+                      </span>
+                    </div>
                   </div>
-                ) : (
-                  <div className="w-5 h-5 rounded-full border-2 border-gray-300 bg-white" />
-                )}
-              </div>
-            )}
+                );
+              }
 
-            {!isUser && (
-              <img
-                src={contactAvatar}
-                className="w-10 h-10 rounded-[6px] object-cover bg-gray-200 mr-2 shrink-0"
-              />
-            )}
+              // ------------------------
+              // 场景 B: 标准对话气泡 (带头像)
+              // ------------------------
+              if (!part.text.trim() && messageParts.length > 1) return null; // 过滤空行
 
-            <div
-              className={`flex flex-col max-w-[75%] ${
-                isUser ? "items-end" : "items-start"
-              }`}
-            >
-              {!isUser && contactInfo?.name && (
-                <span className="text-[10px] text-gray-400 mb-1 ml-1">
-                  {contactInfo.name}
-                </span>
-              )}
+              let bubbleClass = isUser
+                ? "bg-[#95ec69] text-black rounded-[6px]"
+                : "bg-white text-black rounded-[6px] border border-gray-100";
 
-              <div
-                onContextMenu={(e) => handleContextMenu(e, msg)}
-                onClick={(e) => {
-                  if (isSelectionMode) {
-                    e.stopPropagation();
-                    onToggleSelection && onToggleSelection(msg.id);
-                  }
-                }}
-                className={`relative px-3 py-2 text-[15px] leading-relaxed break-words shadow-sm select-text cursor-pointer ${bubbleClass}`}
-              >
-                {/* 🔥🔥🔥 分支 1：旁白模式渲染 (Novel Style) 🔥🔥🔥 */}
-                {isAsideMode ? (
-                  <div className="flex flex-col items-start w-full gap-2">
-                    {splitNarrativeContent(msg.content).map((part, idx) => {
-                      if (part.isNarration) {
-                        // 动作/旁白框样式：米色背景，类似便签
-                        return (
-                          <div
-                            key={idx}
-                            className="bg-[#fffdf5] text-[#7d7164] px-3 py-2 rounded-lg text-sm border border-[#e8e2d2] shadow-sm w-full font-normal italic"
-                          >
-                            {part.text.replace(/[（）()]/g, "")}{" "}
-                            {/* 去掉括号显示 */}
-                          </div>
-                        );
-                      } else {
-                        // 对话气泡样式：标准白底黑字
-                        return (
-                          <div
-                            key={idx}
-                            className="bg-white text-black px-3 py-2 rounded-[6px] border border-gray-100 shadow-sm"
-                          >
-                            <RenderContentWithImages content={part.text} />
-                          </div>
-                        );
+              if (
+                isStickerMode ||
+                msg.type === "image" ||
+                isInviteMode ||
+                isFocusMode
+              ) {
+                bubbleClass = "bg-transparent shadow-none p-0 border-none";
+              }
+
+              return (
+                <div
+                  key={`${msg.id}-bubble-${index}`}
+                  className={`flex w-full items-start ${
+                    isUser ? "justify-end" : "justify-start"
+                  }`}
+                >
+                  {/* 多选框 */}
+                  {isSelectionMode && index === 0 && (
+                    <div
+                      className="mr-3 shrink-0 cursor-pointer animate-in fade-in zoom-in duration-200 self-center"
+                      onClick={() =>
+                        onToggleSelection && onToggleSelection(msg.id)
                       }
-                    })}
-                  </div>
-                ) : (
-                  /* 🔥🔥🔥 分支 2：普通模式渲染 (Standard Bubble) 🔥🔥🔥 */
-                  <>
-                    {msg.type === "focus_invite" && (
-                      <FocusCard
-                        type="invite"
-                        duration={msg.extra?.duration}
-                        breakTime={msg.extra?.breakTime}
-                        cycles={msg.extra?.cycles}
-                        taskName={msg.extra?.taskName}
-                      />
-                    )}
-
-                    {msg.type === "focus_share" && (
-                      <FocusCard
-                        type="share"
-                        duration={msg.extra?.totalSeconds}
-                        taskName={msg.extra?.taskName}
-                        isSelf={true}
-                      />
-                    )}
-
-                    {isInviteMode && (
-                      <div className="flex flex-col items-end">
-                        <div className="bg-white rounded-xl p-3 shadow-sm border border-gray-200 w-60 active:scale-95 transition-transform overflow-hidden relative">
-                          <div className="flex items-start gap-3 mb-3 relative z-10">
-                            <div className="w-12 h-12 bg-gray-100 rounded-md overflow-hidden shrink-0 border border-gray-100">
-                              <img
-                                src={
-                                  msg.alt ||
-                                  "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=500&q=80"
-                                }
-                                className="w-full h-full object-cover"
-                              />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-[14px] text-gray-900 font-medium leading-tight mb-1 line-clamp-2">
-                                我的耳机分你一半，和我一起听歌吧～
-                              </div>
-                              <div className="text-[10px] text-gray-400 truncate">
-                                by {isUser ? "我" : contactInfo?.name || "AI"}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="border-t border-gray-100 pt-2 flex items-center gap-1.5 text-[10px] text-gray-400 relative z-10">
-                            <div className="bg-red-50 p-0.5 rounded-full">
-                              <Music className="w-3 h-3 text-red-500" />
-                            </div>
-                            网易云音乐
-                          </div>
-                          <div className="absolute -bottom-6 -right-6 w-20 h-20 bg-red-500/5 rounded-full blur-xl pointer-events-none"></div>
+                    >
+                      {isSelected ? (
+                        <div className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center text-white">
+                          <Check className="w-3.5 h-3.5" />
                         </div>
-                        {msg.extra?.accepted && (
-                          <div className="mt-1.5 text-[10px] text-white/60 bg-black/20 px-2 py-0.5 rounded-full flex items-center gap-1 animate-in fade-in slide-in-from-top-1 backdrop-blur-sm self-center">
-                            <CheckCircle2 className="w-2.5 h-2.5" />
-                            {(contactInfo?.name || "对方") + " 已同意听歌"}
-                          </div>
-                        )}
-                      </div>
-                    )}
+                      ) : (
+                        <div className="w-5 h-5 rounded-full border-2 border-gray-300 bg-white" />
+                      )}
+                    </div>
+                  )}
 
-                    {markdownImage && (
-                      <>
-                        <img
-                          src={markdownImage.src}
-                          alt={markdownImage.alt}
-                          className="w-32 h-32 object-contain cursor-zoom-in bg-white rounded-lg"
-                          style={{ display: isImageFailed ? "none" : "block" }}
-                          onClick={() =>
-                            !isSelectionMode &&
-                            setPreviewImage(markdownImage.src)
-                          }
-                          onError={() => {
-                            setFailedImages((prev) =>
-                              new Set(prev).add(msg.id)
-                            );
-                          }}
-                        />
-                        {isImageFailed && (
-                          <div className="w-32 h-32 bg-gray-100 rounded-lg flex flex-col items-center justify-center text-gray-400 border border-gray-200 border-dashed">
-                            <ImageOff className="w-8 h-8 mb-2 opacity-50" />
-                            <span className="text-[10px] opacity-70">
-                              图片失效
-                            </span>
-                          </div>
-                        )}
-                      </>
-                    )}
+                  {/* 对方头像 (仅非用户显示) */}
+                  {!isUser && (
+                    <img
+                      src={contactAvatar}
+                      className="w-10 h-10 rounded-[6px] object-cover bg-gray-200 mr-2 shrink-0 select-none"
+                    />
+                  )}
 
-                    {msg.type === "image" && (
-                      <img
-                        src={msg.content}
-                        alt="img"
-                        onClick={() =>
-                          !isSelectionMode && setPreviewImage(msg.content)
-                        }
-                        className="max-w-[200px] max-h-[200px] rounded-[6px] cursor-zoom-in bg-white border border-gray-200"
-                      />
-                    )}
-
-                    {msg.type === "sticker" && (
-                      <img
-                        src={msg.content || msg.audioUrl}
-                        className="w-32 h-32 object-contain"
-                        alt="sticker"
-                      />
-                    )}
-
-                    {!isStickerMode &&
-                      !isInviteMode &&
-                      !isFocusMode &&
-                      msg.type !== "image" &&
-                      msg.type !== "audio" && (
-                        <RenderContentWithImages content={msg.content || ""} />
+                  <div
+                    className={`flex flex-col max-w-[75%] ${
+                      isUser ? "items-end" : "items-start"
+                    }`}
+                  >
+                    {/* 名字 (仅第一段且非用户显示) */}
+                    {!isUser &&
+                      contactInfo?.name &&
+                      index === 0 &&
+                      !shouldParseNarrative && (
+                        <span className="text-[10px] text-gray-400 mb-1 ml-1">
+                          {contactInfo.name}
+                        </span>
                       )}
 
-                    {msg.type === "audio" && (
-                      <div
-                        onClick={() =>
-                          !isSelectionMode &&
-                          msg.audioUrl &&
-                          playAudio(msg.audioUrl, msg.id)
+                    {/* 气泡内容 */}
+                    <div
+                      onContextMenu={(e) => handleContextMenu(e, msg)}
+                      onClick={(e) => {
+                        if (isSelectionMode) {
+                          e.stopPropagation();
+                          onToggleSelection && onToggleSelection(msg.id);
                         }
-                        className="flex items-center gap-2 min-w-[80px]"
-                      >
-                        <Volume2
-                          className={`w-4 h-4 ${
-                            playingAudioId === msg.id
-                              ? "animate-pulse text-green-700"
-                              : ""
-                          }`}
-                        />
-                        <span>
-                          {msg.duration ? `${msg.duration}"` : "语音"}
-                        </span>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
+                      }}
+                      className={`relative px-3 py-2 text-[15px] leading-relaxed break-words shadow-sm select-text cursor-pointer ${bubbleClass}`}
+                    >
+                      {/* --- 下面是原本的内容渲染逻辑 --- */}
 
-            {isUser && (
-              <div className="ml-2 shrink-0">
-                {myAvatar ? (
-                  <img
-                    src={myAvatar}
-                    className="w-10 h-10 rounded-[6px] object-cover bg-gray-200"
-                  />
-                ) : (
-                  <div className="w-10 h-10 rounded-[6px] bg-[#07c160]"></div>
-                )}
-              </div>
-            )}
+                      {msg.type === "focus_invite" && (
+                        <FocusCard
+                          type="invite"
+                          duration={msg.extra?.duration}
+                          breakTime={msg.extra?.breakTime}
+                          cycles={msg.extra?.cycles}
+                          taskName={msg.extra?.taskName}
+                        />
+                      )}
+
+                      {msg.type === "focus_share" && (
+                        <FocusCard
+                          type="share"
+                          duration={msg.extra?.totalSeconds}
+                          taskName={msg.extra?.taskName}
+                          isSelf={true}
+                        />
+                      )}
+
+                      {isInviteMode && (
+                        <div className="flex flex-col items-end">
+                          <div className="bg-white rounded-xl p-3 shadow-sm border border-gray-200 w-60 active:scale-95 transition-transform overflow-hidden relative">
+                            <div className="flex items-start gap-3 mb-3 relative z-10">
+                              {/* Music Card UI... */}
+                              <div className="w-12 h-12 bg-gray-100 rounded-md overflow-hidden shrink-0 border border-gray-100">
+                                <img
+                                  src={
+                                    msg.alt ||
+                                    "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=500&q=80"
+                                  }
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-[14px] text-gray-900 font-medium leading-tight mb-1 line-clamp-2">
+                                  我的耳机分你一半，和我一起听歌吧～
+                                </div>
+                                <div className="text-[10px] text-gray-400 truncate">
+                                  by {isUser ? "我" : contactInfo?.name || "AI"}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="border-t border-gray-100 pt-2 flex items-center gap-1.5 text-[10px] text-gray-400 relative z-10">
+                              <div className="bg-red-50 p-0.5 rounded-full">
+                                <Music className="w-3 h-3 text-red-500" />
+                              </div>
+                              网易云音乐
+                            </div>
+                            <div className="absolute -bottom-6 -right-6 w-20 h-20 bg-red-500/5 rounded-full blur-xl pointer-events-none"></div>
+                          </div>
+                          {msg.extra?.accepted && (
+                            <div className="mt-1.5 text-[10px] text-white/60 bg-black/20 px-2 py-0.5 rounded-full flex items-center gap-1 animate-in fade-in slide-in-from-top-1 backdrop-blur-sm self-center">
+                              <CheckCircle2 className="w-2.5 h-2.5" />
+                              {(contactInfo?.name || "对方") + " 已同意听歌"}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* 图片处理 */}
+                      {markdownImage && (
+                        <>
+                          <img
+                            src={markdownImage.src}
+                            alt={markdownImage.alt}
+                            className="w-32 h-32 object-contain cursor-zoom-in bg-white rounded-lg"
+                            style={{
+                              display: isImageFailed ? "none" : "block",
+                            }}
+                            onClick={() =>
+                              !isSelectionMode &&
+                              setPreviewImage(markdownImage.src)
+                            }
+                            onError={() => {
+                              setFailedImages((prev) =>
+                                new Set(prev).add(msg.id)
+                              );
+                            }}
+                          />
+                          {isImageFailed && (
+                            <div className="w-32 h-32 bg-gray-100 rounded-lg flex flex-col items-center justify-center text-gray-400 border border-gray-200 border-dashed">
+                              <ImageOff className="w-8 h-8 mb-2 opacity-50" />
+                              <span className="text-[10px] opacity-70">
+                                图片失效
+                              </span>
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {msg.type === "image" && (
+                        <img
+                          src={msg.content}
+                          alt="img"
+                          onClick={() =>
+                            !isSelectionMode && setPreviewImage(msg.content)
+                          }
+                          className="max-w-[200px] max-h-[200px] rounded-[6px] cursor-zoom-in bg-white border border-gray-200"
+                        />
+                      )}
+
+                      {msg.type === "sticker" && (
+                        <img
+                          src={msg.content || msg.audioUrl}
+                          className="w-32 h-32 object-contain"
+                          alt="sticker"
+                        />
+                      )}
+
+                      {/* 普通文本渲染 (这里使用 split 后的 text) */}
+                      {!isStickerMode &&
+                        !isInviteMode &&
+                        !isFocusMode &&
+                        msg.type !== "image" &&
+                        msg.type !== "audio" && (
+                          <RenderContentWithImages content={part.text || ""} />
+                        )}
+
+                      {msg.type === "audio" && (
+                        <div
+                          onClick={() =>
+                            !isSelectionMode &&
+                            msg.audioUrl &&
+                            playAudio(msg.audioUrl, msg.id)
+                          }
+                          className="flex items-center gap-2 min-w-[80px]"
+                        >
+                          <Volume2
+                            className={`w-4 h-4 ${
+                              playingAudioId === msg.id
+                                ? "animate-pulse text-green-700"
+                                : ""
+                            }`}
+                          />
+                          <span>
+                            {msg.duration ? `${msg.duration}"` : "语音"}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 用户头像 */}
+                  {isUser && (
+                    <div className="ml-2 shrink-0">
+                      {myAvatar ? (
+                        <img
+                          src={myAvatar}
+                          className="w-10 h-10 rounded-[6px] object-cover bg-gray-200"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-[6px] bg-[#07c160]"></div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         );
       })}
@@ -643,6 +674,7 @@ export default function MessageList({
         </div>
       )}
 
+      {/* 弹窗菜单部分保持不变 */}
       {menuVisible && selectedMsg && (
         <>
           <div
@@ -665,6 +697,7 @@ export default function MessageList({
                   label="收藏"
                   onClick={() => setMenuVisible(false)}
                 />
+
                 {selectedMsg.role !== "user" ? (
                   <MenuItem
                     icon={RefreshCw}
@@ -684,6 +717,7 @@ export default function MessageList({
                     }}
                   />
                 )}
+
                 <MenuItem
                   icon={Quote}
                   label="引用"
@@ -706,6 +740,7 @@ export default function MessageList({
                       onEnterSelectionMode(selectedMsg.id);
                   }}
                 />
+
                 {selectedMsg.role !== "user" && (
                   <MenuItem
                     icon={Play}
@@ -716,6 +751,7 @@ export default function MessageList({
                     }}
                   />
                 )}
+
                 {selectedMsg.type !== "image" &&
                   selectedMsg.type !== "sticker" &&
                   selectedMsg.type !== "music_invite" &&

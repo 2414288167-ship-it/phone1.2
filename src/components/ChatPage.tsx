@@ -3,7 +3,15 @@ import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import MessageList, { Message } from "@/components/MessageList";
 import { InputArea } from "@/components/InputArea";
-import { Menu, ChevronLeft, Share, Star, Trash2, X } from "lucide-react";
+import {
+  Menu,
+  ChevronLeft,
+  Share,
+  Star,
+  Trash2,
+  X,
+  ChevronDown,
+} from "lucide-react";
 import { useAI } from "@/context/AIContext";
 import { useUnread } from "@/context/UnreadContext";
 
@@ -30,10 +38,18 @@ export default function ChatPage({
   conversationId,
   contactName = "AI助手",
 }: ChatPageProps) {
-  // ✅ 获取 regenerateChat
   const { requestAIReply, getChatState, triggerActiveMessage, regenerateChat } =
     useAI();
   const { clearUnread } = useUnread();
+
+  // --- 🔥 滚动控制核心 Ref ---
+  // isSticky: 标记"当前是否应该跟随到底部"。默认 true (跟随)
+  const isSticky = useRef(true);
+  // isUserInteracting: 标记"用户正在操作"。如果为 true，强行暂停自动滚动
+  const isUserInteracting = useRef(false);
+
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -42,45 +58,17 @@ export default function ChatPage({
   const [contactInfo, setContactInfo] = useState<any>(null);
   const [myAvatar, setMyAvatar] = useState<string>("");
 
-  // ✅ 多选模式状态
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const replyTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // 交互锁定时器
+  const interactionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const reloadMessages = () => {
     if (!conversationId) return;
     const savedMsgs = localStorage.getItem(`chat_${conversationId}`);
     if (savedMsgs) setMessages(JSON.parse(savedMsgs));
-  };
-
-  // 🔥🔥🔥 新增：辅助函数：获取预设上下文 🔥🔥🔥
-  const getPresetContext = (presetId: string | undefined): string => {
-    if (!presetId) return "";
-    try {
-      const presetsStr = localStorage.getItem("app_presets");
-      if (!presetsStr) return "";
-      const presets = JSON.parse(presetsStr);
-      const targetPreset = presets.find((p: any) => p.id === presetId);
-
-      if (!targetPreset || !targetPreset.prompts) return "";
-
-      // 筛选出 enabled 为 true 的 prompt，并按顺序拼接
-      // 注意：Tavern JSON 通常有 prompt_order，这里简化处理，直接按数组顺序
-      // 并且我们只提取 content
-      return targetPreset.prompts
-        .filter((p: any) => p.enabled)
-        .map((p: any) => {
-          // 这里可以根据 p.role 做一些特殊处理，比如如果是 user role，可以加前缀
-          // 但通常 Tavern 预设直接拼接到 System Prompt 里效果最好
-          return p.content;
-        })
-        .join("\n\n");
-    } catch (e) {
-      console.error("预设读取失败", e);
-      return "";
-    }
   };
 
   useEffect(() => {
@@ -98,6 +86,8 @@ export default function ChatPage({
             name: currentContact.remark || currentContact.name,
             aiName: currentContact.aiName || currentContact.name,
             myNickname: "我",
+            timeAwareness: currentContact.timeAwareness || false,
+            asideMode: currentContact.asideMode || false,
           });
         } else {
           setContactInfo({
@@ -149,13 +139,72 @@ export default function ChatPage({
       window.removeEventListener("chat_updated" as any, handleUpdate);
   }, [conversationId, clearUnread]);
 
-  useEffect(() => {
-    // 仅在非多选模式下自动滚动
-    if (!isSelectionMode) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages, isPanelOpen, isSelectionMode]);
+  // --- 🔥🔥🔥 终极滚动逻辑 (含交互锁) 🔥🔥🔥 ---
 
+  // 1. 滚动到底部 (执行者)
+  const scrollToBottom = (behavior: "smooth" | "auto" = "auto") => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({
+        top: scrollContainerRef.current.scrollHeight,
+        behavior: behavior,
+      });
+      // 只要触发了强制到底，就恢复锁定 (除非用户正在按着屏幕)
+      if (!isUserInteracting.current) {
+        isSticky.current = true;
+        setShowScrollButton(false);
+      }
+    }
+  };
+
+  // 2. 监听用户交互 (防抖)
+  // 当用户 触摸屏幕、滚动滚轮、按下鼠标 时触发
+  const handleUserInteraction = () => {
+    isUserInteracting.current = true;
+    // 同时也暂时解除锁定，防止手指一停就被拽回去
+    isSticky.current = false;
+    setShowScrollButton(true);
+
+    if (interactionTimeoutRef.current) {
+      clearTimeout(interactionTimeoutRef.current);
+    }
+    // 1秒后如果没有后续操作，认为交互结束，解除"交互锁"
+    // (注意：isSticky 不会自动变回 true，必须等用户滚到底部)
+    interactionTimeoutRef.current = setTimeout(() => {
+      isUserInteracting.current = false;
+    }, 1000);
+  };
+
+  // 3. 滚动位置监听
+  const handleScroll = () => {
+    if (!scrollContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } =
+      scrollContainerRef.current;
+
+    // 物理距离
+    const distance = scrollHeight - scrollTop - clientHeight;
+
+    // 阈值：20px
+    if (distance > 20) {
+      // 离底部远了 -> 用户在看历史
+      isSticky.current = false;
+      setShowScrollButton(true);
+    } else if (distance < 5) {
+      // 极其接近底部 -> 用户回到了最新
+      isSticky.current = true;
+      setShowScrollButton(false);
+    }
+  };
+
+  // 4. 响应 AI 消息更新
+  useEffect(() => {
+    // 只有当：1. 之前锁定在底部  AND  2. 用户现在没按着屏幕
+    if (!isSelectionMode && isSticky.current && !isUserInteracting.current) {
+      // 使用 auto (瞬移)，防止动画冲突
+      scrollToBottom("auto");
+    }
+  }, [messages, isSelectionMode, isPanelOpen]);
+
+  // --- 输入框逻辑 ---
   useEffect(() => {
     if (input.trim().length > 0 && replyTimerRef.current) {
       clearTimeout(replyTimerRef.current);
@@ -163,7 +212,6 @@ export default function ChatPage({
     }
   }, [input]);
 
-  // === 多选逻辑 ===
   const enterSelectionMode = (initialMsgId?: string) => {
     setIsSelectionMode(true);
     if (initialMsgId) {
@@ -214,7 +262,6 @@ export default function ChatPage({
     });
   };
 
-  // ✅ 智能重新说
   const handleResendMessage = (msg: Message) => {
     if (conversationId && contactInfo) {
       regenerateChat(conversationId, msg.id, contactInfo);
@@ -223,7 +270,6 @@ export default function ChatPage({
 
   const handleContinueMessage = (msg: Message) => {
     if (conversationId && contactInfo) {
-      // @ts-ignore
       triggerActiveMessage(conversationId, contactInfo, "continue");
     }
   };
@@ -276,6 +322,12 @@ export default function ChatPage({
       return newMessages;
     });
     if (type === "text") setInput("");
+
+    // 用户发送时，强制锁定并滚动
+    isSticky.current = true;
+    isUserInteracting.current = false;
+    setTimeout(() => scrollToBottom("smooth"), 100);
+
     const isReadyToSendToAI = !(type === "audio" && !text);
     if (isReadyToSendToAI) {
       if (replyTimerRef.current) clearTimeout(replyTimerRef.current);
@@ -300,7 +352,7 @@ export default function ChatPage({
   };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50 text-gray-900">
+    <div className="flex flex-col h-screen bg-gray-50 text-gray-900 relative">
       <header className="h-14 flex items-center justify-between px-4 border-b border-gray-200 bg-white/90 backdrop-blur-sm shrink-0 z-10">
         <div className="flex items-center gap-2">
           <Link
@@ -335,7 +387,18 @@ export default function ChatPage({
         </Link>
       </header>
 
+      {/* 
+        🔥 滚动容器 
+        - 绑定 onWheel, onTouchMove: 拦截用户意图
+        - 绑定 onScroll: 监听位置
+        - 移除 scroll-smooth
+      */}
       <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        onWheel={handleUserInteraction} // 鼠标滚轮 -> 判定为交互
+        onTouchMove={handleUserInteraction} // 手指滑动 -> 判定为交互
+        onMouseDown={handleUserInteraction} // 拖动滚动条 -> 判定为交互
         className="flex-1 overflow-y-auto px-1 pt-1 pb-7"
         style={{
           backgroundColor: bgImage ? "transparent" : "#f5f5f5",
@@ -356,18 +419,33 @@ export default function ChatPage({
           onResendMessage={handleResendMessage}
           onContinueMessage={handleContinueMessage}
           onEditMessage={handleEditMessage}
-          // ✅ 传递多选 Props
           isSelectionMode={isSelectionMode}
           selectedIds={selectedIds}
           onToggleSelection={toggleSelection}
           onEnterSelectionMode={enterSelectionMode}
         />
-        <div ref={messagesEndRef} />
+        {/* 底部垫片 */}
+        <div className="h-4" />
       </div>
 
-      {/* 底部根据模式切换 */}
+      {/* ✨ 悬浮按钮：回到底部 ✨ */}
+      {showScrollButton && !isSelectionMode && (
+        <div
+          className="absolute bottom-[80px] right-4 z-30 cursor-pointer animate-in fade-in slide-in-from-bottom-2 zoom-in-95 duration-200"
+          onClick={() => {
+            isUserInteracting.current = false; // 点击按钮，解除交互锁
+            scrollToBottom("smooth"); // 主动点击，可以使用平滑滚动
+          }}
+        >
+          <div className="bg-white text-[#07c160] shadow-md rounded-full p-2 border border-[#07c160]/20 flex items-center justify-center hover:bg-green-50 transition-colors active:scale-90">
+            <ChevronDown className="w-6 h-6" />
+          </div>
+        </div>
+      )}
+
+      {/* 底部输入框或多选操作栏 */}
       {isSelectionMode ? (
-        <div className="h-16 bg-white border-t flex items-center justify-around px-4 z-50 shadow-up">
+        <div className="h-16 bg-white border-t flex items-center justify-around px-4 z-50 shadow-up shrink-0">
           <button
             onClick={() => alert("暂未实现")}
             className="flex flex-col items-center gap-1"
@@ -406,9 +484,9 @@ export default function ChatPage({
           onSendText={() => handleUserSend(input, "text")}
           onPanelChange={(isOpen) => {
             setIsPanelOpen(isOpen);
-            setTimeout(() => {
-              messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-            }, 300);
+            if (isSticky.current) {
+              setTimeout(() => scrollToBottom("smooth"), 300);
+            }
           }}
           onSendAudio={async (text, duration, audioBlob, imageDesc) => {
             if (imageDesc) {

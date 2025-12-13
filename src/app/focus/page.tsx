@@ -892,7 +892,13 @@ const FocusContent = () => {
 // 主页面组件：用 Suspense 包裹依赖 useSearchParams 的 FocusContent
 export default function FocusPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-slate-400">加载中...</div>}>
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center text-slate-400">
+          加载中...
+        </div>
+      }
+    >
       <FocusContent />
     </Suspense>
   );

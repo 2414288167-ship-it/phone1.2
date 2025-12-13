@@ -235,8 +235,14 @@ export default function ChatSettingsPage({ params }: PageProps) {
   const [timeSense, setTimeSense] = useState(true);
   const [timezone, setTimezone] = useState("Asia/Shanghai");
   const [lyricsPos, setLyricsPos] = useState("top");
-
+  const [absoluteOnlineMode, setAbsoluteOnlineMode] = useState(false);
   const contactAvatarInputRef = useRef<HTMLInputElement>(null);
+
+  // ✨ 新增：线下模式的子选项
+  const [offlineStyle, setOfflineStyle] = useState<"normal" | "novel">(
+    "normal"
+  );
+  const [novelWordCount, setNovelWordCount] = useState<number>(500); // 默认500字
 
   const groupOptions = [
     "特别关心",
@@ -340,10 +346,15 @@ export default function ChatSettingsPage({ params }: PageProps) {
             if (contact.voiceLang) setVoiceLang(contact.voiceLang);
             if (contact.asideMode !== undefined)
               setAsideMode(contact.asideMode);
+            if (contact.absoluteOnlineMode !== undefined)
+              setAbsoluteOnlineMode(contact.absoluteOnlineMode);
             if (contact.todoSync !== undefined) setTodoSync(contact.todoSync);
             if (contact.descMode !== undefined) setDescMode(contact.descMode);
             if (contact.timeSense !== undefined)
               setTimeSense(contact.timeSense);
+            if (contact.offlineStyle) setOfflineStyle(contact.offlineStyle);
+            if (contact.novelWordCount)
+              setNovelWordCount(contact.novelWordCount);
             if (contact.timezone) setTimezone(contact.timezone);
             if (contact.lyricsPos) setLyricsPos(contact.lyricsPos);
           }
@@ -431,6 +442,9 @@ export default function ChatSettingsPage({ params }: PageProps) {
               timeSense,
               timezone,
               lyricsPos,
+              absoluteOnlineMode,
+              offlineStyle,
+              novelWordCount,
             };
           }
           return c;
@@ -726,16 +740,87 @@ export default function ChatSettingsPage({ params }: PageProps) {
             value={asideMode}
             onChange={setAsideMode}
           />
+          {/* ✨ 绝对线上模式开关 (修改 onChange 逻辑) ✨ */}
           <SwitchItem
-            label="启用待办事项同步"
-            value={todoSync}
-            onChange={setTodoSync}
+            label="绝对线上模式"
+            desc="强制保持网聊风格，禁止任何动作描写和括号"
+            value={absoluteOnlineMode}
+            onChange={(val: boolean) => {
+              setAbsoluteOnlineMode(val);
+              // 互斥逻辑：如果开启了线上模式，强制关闭线下模式
+              if (val) {
+                setDescMode(false);
+              }
+            }}
           />
+          {/* ✨ 线下模式 (扩展版) ✨ */}
           <SwitchItem
-            label="线下模式"
+            label="线下模式 (物理接触)"
             value={descMode}
-            onChange={setDescMode}
+            onChange={(val: boolean) => {
+              setDescMode(val);
+              if (val) setAbsoluteOnlineMode(false); // 互斥
+            }}
           />
+
+          {/* 只有开启线下模式时，才显示子选项 */}
+          {descMode && (
+            <div className="bg-gray-50 rounded-lg p-3 mt-[-10px] mb-4 mx-4 border border-gray-100 animate-in slide-in-from-top-2">
+              <div className="text-xs text-gray-500 mb-2 font-medium">
+                回复风格设置
+              </div>
+
+              <div className="flex bg-gray-200 rounded-lg p-1 mb-3">
+                <button
+                  onClick={() => setOfflineStyle("normal")}
+                  className={`flex-1 py-1.5 text-xs rounded-md transition-all ${
+                    offlineStyle === "normal"
+                      ? "bg-white text-black shadow-sm"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  💬 普通闲聊
+                </button>
+                <button
+                  onClick={() => setOfflineStyle("novel")}
+                  className={`flex-1 py-1.5 text-xs rounded-md transition-all ${
+                    offlineStyle === "novel"
+                      ? "bg-white text-black shadow-sm"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  📖 沉浸小说
+                </button>
+              </div>
+
+              {offlineStyle === "novel" && (
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-sm text-gray-600">目标字数</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={novelWordCount}
+                      onChange={(e) =>
+                        setNovelWordCount(Number(e.target.value))
+                      }
+                      className="w-16 text-center bg-white border border-gray-200 rounded px-1 py-1 text-sm outline-none focus:border-green-500"
+                      min={100}
+                      max={2000}
+                      step={50}
+                    />
+                    <span className="text-xs text-gray-400">字左右</span>
+                  </div>
+                </div>
+              )}
+
+              <p className="text-[10px] text-gray-400 mt-2 leading-relaxed">
+                {offlineStyle === "normal"
+                  ? "模拟日常面对面相处，对话简短自然，包含少量肢体动作。"
+                  : "类似酒馆AI体验，大量描写环境、感官、心理活动和肢体细节，适合沉浸式剧情推进。"}
+              </p>
+            </div>
+          )}
+
           <SwitchItem
             label="时间感知"
             value={timeSense}
