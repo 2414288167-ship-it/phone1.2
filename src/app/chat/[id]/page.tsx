@@ -19,7 +19,7 @@ import {
   X,
   BookMarked,
   Music,
-  ChevronDown, // 🔥 新增：用于“回到底部”按钮图标
+  ChevronDown,
 } from "lucide-react";
 import { useAI } from "@/context/AIContext";
 import { useUnread } from "@/context/UnreadContext";
@@ -170,7 +170,7 @@ export default function ChatPage({ params }: PageProps) {
   // 🔥 新增：是否正在录音 (用于判断交互状态)
   const [isRecording, setIsRecording] = useState(false);
 
-  // --- 🔥🔥🔥 滚动控制核心 Ref (修复版) 🔥🔥🔥 ---
+  // --- 🔥🔥🔥 滚动控制核心 Ref 🔥🔥🔥 ---
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const replyTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -188,7 +188,7 @@ export default function ChatPage({ params }: PageProps) {
   // 获取 AI 状态
   const aiStatus = conversationId ? getChatState(conversationId) : "idle";
 
-  // --- 1. 加载数据 (使用 useCallback 保证引用稳定) ---
+  // --- 1. 加载数据 ---
   const reloadMessages = useCallback(() => {
     if (!conversationId) return;
     const savedMsgs = localStorage.getItem(`chat_${conversationId}`);
@@ -307,7 +307,7 @@ export default function ChatPage({ params }: PageProps) {
       window.removeEventListener("chat_updated" as any, handleUpdate);
   }, [conversationId, reloadMessages, clearUnread]);
 
-  // 初始化加载 (保留原逻辑)
+  // 初始化加载
   useEffect(() => {
     if (conversationId) {
       const saved = localStorage.getItem(`chat_${conversationId}`);
@@ -336,70 +336,106 @@ export default function ChatPage({ params }: PageProps) {
     }
   }, [messages, conversationId]);
 
-  // --- 🔥🔥🔥 核心修复：滚动逻辑全重写 🔥🔥🔥 ---
+  // --- 🔥🔥🔥 核心修复：滚动逻辑全重写 (防失效版) 🔥🔥🔥 ---
 
-  // 1. 滚动到底部 (执行者)
+  // 1. 滚动到底部 (执行者) - 引入 requestAnimationFrame
   const scrollToBottom = (behavior: "smooth" | "auto" = "auto") => {
-    if (scrollContainerRef.current) {
-      scrollContainerRef.current.scrollTo({
-        top: scrollContainerRef.current.scrollHeight,
-        behavior: behavior,
-      });
-      // 只要触发了强制到底，就恢复锁定 (除非用户正在按着屏幕)
-      if (!isUserInteracting.current) {
-        isSticky.current = true;
-        setShowScrollButton(false);
+    // 使用 requestAnimationFrame 确保在浏览器重绘之前执行，解决偶发失效
+    requestAnimationFrame(() => {
+      if (scrollContainerRef.current) {
+        const { scrollHeight, clientHeight } = scrollContainerRef.current;
+        const maxScrollTop = scrollHeight - clientHeight;
+
+        scrollContainerRef.current.scrollTo({
+          top: maxScrollTop > 0 ? maxScrollTop : 0,
+          behavior: behavior,
+        });
+
+        // 只要触发了强制到底，就恢复锁定 (除非用户正在按着屏幕)
+        if (!isUserInteracting.current) {
+          isSticky.current = true;
+          setShowScrollButton(false);
+        }
       }
-    }
+    });
   };
 
-  // 2. 监听用户交互 (防抖) - 解决“一动就跳回底部”的问题
+  // 2. 监听用户交互 (防抖)
   const handleUserInteraction = () => {
     isUserInteracting.current = true;
-    // 同时也暂时解除锁定，防止手指一停就被拽回去
-    isSticky.current = false;
+    isSticky.current = false; // 用户操作时，立刻解除吸附
 
     if (interactionTimeoutRef.current) {
       clearTimeout(interactionTimeoutRef.current);
     }
-    // 1秒后如果没有后续操作，认为交互结束
+    // 1秒后如果没有后续操作，认为交互结束 (解除锁，但 sticky 需要手动滚回底部才恢复)
     interactionTimeoutRef.current = setTimeout(() => {
       isUserInteracting.current = false;
     }, 1000);
   };
 
-  // 3. 滚动位置监听 (计算是否应该吸附)
+  // 3. 滚动位置监听 (计算是否应该吸附) - 增加容错
   const handleScroll = () => {
     if (!scrollContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } =
       scrollContainerRef.current;
 
-    // 物理距离
-    const distance = scrollHeight - scrollTop - clientHeight;
-    // 阈值：50px (增加容错)
+    // 使用 Math.abs 并允许一定误差，防止高分屏小数问题
+    const distance = Math.abs(scrollHeight - scrollTop - clientHeight);
+
+    // 阈值：50px (增加容错，手指抖动不容易误触)
     if (distance > 50) {
       isSticky.current = false;
       setShowScrollButton(true);
-    } else if (distance < 10) {
+    } else {
       isSticky.current = true;
       setShowScrollButton(false);
     }
   };
 
-  // 4. 替代旧的 useLayoutEffect，使用更智能的滚动触发
-  // 监听 messages, aiStatus 和 音乐状态
+  // 4. 🔥 引入 ResizeObserver：监听内容高度变化 (如 AI 打字、图片加载)
   useEffect(() => {
-    // 只有当：1. 之前处于吸附状态  AND  2. 用户现在没按着屏幕
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const observer = new ResizeObserver(() => {
+      // 只有当：1. 处于吸附模式 AND 2. 用户没有按住屏幕
+      if (isSticky.current && !isUserInteracting.current && !isSelectionMode) {
+        scrollToBottom("auto"); // 使用 auto 防止抖动
+      }
+    });
+
+    // 监听第一个子元素（通常是 MessageList 的 wrapper），这样能准确捕捉内容变化
+    if (container.firstElementChild) {
+      observer.observe(container.firstElementChild);
+    } else {
+      observer.observe(container);
+    }
+
+    return () => observer.disconnect();
+  }, [isSelectionMode]);
+
+  // 5. 监听窗口大小变化 (处理软键盘弹出)
+  useEffect(() => {
+    const handleResize = () => {
+      if (isSticky.current && !isUserInteracting.current) {
+        scrollToBottom("auto");
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // 6. 响应消息数据变化 (作为 ResizeObserver 的双重保险)
+  useEffect(() => {
     if (isSticky.current && !isUserInteracting.current && !isSelectionMode) {
-      // 使用 auto (瞬移)，防止动画冲突，让新消息平稳出现
       scrollToBottom("auto");
     }
-  }, [messages, aiStatus, currentSong]); // 🔥 添加 currentSong 依赖，防止切歌时乱跳
+  }, [messages, aiStatus, currentSong]);
 
-  // (保留原有的 prevMessagesLength 逻辑用于非流式更新的首次加载)
+  // (首次加载时保留原有行为)
   useLayoutEffect(() => {
     if (messages.length > prevMessagesLength.current) {
-      // 首次加载或非流式大更新时，如果不需要吸附，则不操作
       if (isSticky.current && !isUserInteracting.current) {
         scrollToBottom("auto");
       }
@@ -411,7 +447,6 @@ export default function ChatPage({ params }: PageProps) {
   useEffect(() => {
     if (replyTimerRef.current) clearTimeout(replyTimerRef.current);
 
-    // 2. 如果用户正在交互，绝对不触发
     if (input.length > 0 || isPanelOpen || isRecording) {
       console.log("⏳ 用户正在交互 (打字/选图/录音)，计时暂停...");
       return;
@@ -431,7 +466,7 @@ export default function ChatPage({ params }: PageProps) {
         triggerAI(messages);
       }, delay);
     }
-  }, [messages, input, isPanelOpen, isRecording]); // 依赖中包含了交互状态
+  }, [messages, input, isPanelOpen, isRecording]);
 
   // 触发 AI
   const triggerAI = (currentMessages: Message[]) => {
@@ -793,8 +828,6 @@ export default function ChatPage({ params }: PageProps) {
       replyTimerRef.current = setTimeout(() => {
         setMessages((currentMsgs) => {
           if (conversationId && contactInfo) {
-            // (复用 triggerAI 的逻辑，这里为了保持闭包最新，仍需手动构建一次)
-            // 为简化，直接调用我们提取出来的 triggerAI 函数
             triggerAI(currentMsgs);
           }
           return currentMsgs;
