@@ -96,13 +96,7 @@ const ToDoWidget = () => {
       } else {
         // 如果没有数据，显示默认数据
         setItems([
-          {
-            id: "1",
-            text: "去 /focus 添加任务吧 🩵",
-            done: false,
-            type: "nu-i",
-          },
-          { id: "2", text: "保持好心情 ✨", done: false, type: "u-ni" },
+          { id: "1", text: "保持好心情 ✨", done: false, type: "u-ni" },
         ]);
       }
     }
@@ -450,3 +444,4 @@ export default function HomePage() {
     </div>
   );
 }
+
