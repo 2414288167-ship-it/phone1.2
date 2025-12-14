@@ -20,6 +20,7 @@ import {
   BookMarked,
   Music,
   ChevronDown,
+  AlertTriangle, // 新增图标用于错误提示
 } from "lucide-react";
 import { useAI } from "@/context/AIContext";
 import { useUnread } from "@/context/UnreadContext";
@@ -136,19 +137,35 @@ const getMemoryPrompt = (contact: any) => {
   return memoryText;
 };
 
-// --- 🔥🔥🔥 修复点：适配 Next.js 14 的同步 Params 🔥🔥🔥 ---
+// --- Next.js 14 适配：同步 Params ---
 interface PageProps {
   params: { id: string };
 }
 
 export default function ChatPage({ params }: PageProps) {
-  // 1. 直接读取 ID，不使用 Promise (解决 "params.then is not a function" 报错)
+  // 1. 获取 Conversation ID
   const conversationId = params.id;
-  
-  // 2. 增加挂载检查，防止水合错误
+
+  // 2. 挂载状态 & 错误状态
   const [mounted, setMounted] = useState(false);
+  const [hasError, setHasError] = useState(false); // 🔥 紧急修复模式标志
+
   useEffect(() => {
     setMounted(true);
+    // 全局错误捕获 (用于捕获渲染时的崩溃)
+    const errorHandler = (event: ErrorEvent) => {
+      // 如果错误信息包含 React 相关的渲染错误或 JSON 解析错误
+      if (
+        event.message?.includes("Minified React error") ||
+        event.message?.includes("client-side exception") ||
+        event.message?.includes("is not defined") ||
+        event.message?.includes("JSON")
+      ) {
+        setHasError(true);
+      }
+    };
+    window.addEventListener("error", errorHandler);
+    return () => window.removeEventListener("error", errorHandler);
   }, []);
 
   const { requestAIReply, getChatState, triggerActiveMessage, regenerateChat } =
@@ -198,46 +215,77 @@ export default function ChatPage({ params }: PageProps) {
   // 获取 AI 状态
   const aiStatus = conversationId ? getChatState(conversationId) : "idle";
 
-  // --- 1. 加载数据 ---
+  // --- 1. 加载数据 (增加防崩保护) ---
   const reloadMessages = useCallback(() => {
     if (!conversationId) return;
-    const savedMsgs = localStorage.getItem(`chat_${conversationId}`);
-    if (savedMsgs) {
-      try {
-        setMessages(JSON.parse(savedMsgs));
-      } catch (e) {
-        console.error("解析消息失败", e);
+    try {
+      const savedMsgs = localStorage.getItem(`chat_${conversationId}`);
+      if (savedMsgs) {
+        let parsed: Message[] = JSON.parse(savedMsgs);
+
+        // 🔥 数据清洗：过滤掉损坏的消息 (没有id或role的)
+        if (Array.isArray(parsed)) {
+          parsed = parsed.filter((m) => m && m.id && m.role);
+          setMessages(parsed);
+        } else {
+          setMessages([]);
+        }
       }
+    } catch (e) {
+      console.error("解析消息失败，可能数据已损坏", e);
+      setHasError(true); // 触发紧急模式
     }
   }, [conversationId]);
 
+  // 🔥 紧急自救函数：清空当前聊天记录
+  const emergencyClear = () => {
+    if (confirm("是否清空当前聊天记录以恢复页面？")) {
+      localStorage.removeItem(`chat_${conversationId}`);
+      setMessages([]);
+      setHasError(false);
+      window.location.reload();
+    }
+  };
+
   useEffect(() => {
     if (conversationId && typeof window !== "undefined") {
-      const saved = localStorage.getItem(`chat_${conversationId}`);
-      if (saved) setMessages(JSON.parse(saved));
-
-      const contacts = JSON.parse(localStorage.getItem("contacts") || "[]");
-      const contact = contacts.find((c: any) => c.id === conversationId);
-      if (contact) {
-        setContactInfo({
-            ...contact,
-            name: contact.remark || contact.name,
-            aiName: contact.aiName || contact.name,
-            myNickname: "我",
-        });
+      // 1. 加载联系人
+      const contactsStr = localStorage.getItem("contacts");
+      if (contactsStr) {
+        try {
+          const contacts = JSON.parse(contactsStr);
+          const currentContact = contacts.find(
+            (c: any) => String(c.id) === String(conversationId)
+          );
+          if (currentContact) {
+            setContactInfo({
+              ...currentContact,
+              name: currentContact.remark || currentContact.name,
+              aiName: currentContact.aiName || currentContact.name,
+              myNickname: "我",
+            });
+          }
+        } catch (e) {}
       }
 
-      const profile = JSON.parse(
-        localStorage.getItem("user_profile_v4") || "{}"
-      );
-      setMyAvatar(profile.avatar || "");
+      // 2. 加载用户头像
+      const userProfileStr = localStorage.getItem("user_profile_v4");
+      if (userProfileStr) {
+        try {
+          const profile = JSON.parse(userProfileStr);
+          setMyAvatar(profile.avatar || "");
+        } catch (e) {}
+      }
 
+      // 3. 加载背景
       const savedBg = localStorage.getItem(`chat_bg_${conversationId}`);
       if (savedBg) setBgImage(savedBg);
 
+      // 4. 加载消息
+      reloadMessages();
       clearUnread(conversationId);
     }
-  }, [conversationId, clearUnread]);
+  }, [conversationId, reloadMessages, clearUnread]);
 
   // 主动轮询消息
   useEffect(() => {
@@ -329,7 +377,8 @@ export default function ChatPage({ params }: PageProps) {
   // 4. 滚动位置监听
   const handleScroll = () => {
     if (!scrollContainerRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    const { scrollTop, scrollHeight, clientHeight } =
+      scrollContainerRef.current;
     const distance = Math.abs(scrollHeight - scrollTop - clientHeight);
 
     if (distance > 100) {
@@ -413,7 +462,6 @@ export default function ChatPage({ params }: PageProps) {
       contactInfo.worldBookId
     );
     const presetContext = getPresetContext(contactInfo.presetId);
-    // 🔥 获取记忆、生理期等
     const menstrualPrompt = getMenstrualPrompt(contactInfo);
     const memoryPrompt = getMemoryPrompt(contactInfo);
 
@@ -480,27 +528,76 @@ export default function ChatPage({ params }: PageProps) {
 
       // 强力同意词
       const strongAgreeKeywords = [
-        "我听", "一起听", "戴上", "接过", "分我", "来吧", "播放", "放吧", "share", "with me"
+        "我听",
+        "一起听",
+        "戴上",
+        "接过",
+        "分我",
+        "来吧",
+        "播放",
+        "放吧",
+        "share",
+        "with me",
       ];
       // 动作同意词
       const actionkeywords = [
-        "戴上", "接过", "耳机", "凑近", "点头", "伸出", "拿过", "分我", "塞入", "靠近", "倾听", "默许", "闭上眼"
+        "戴上",
+        "接过",
+        "耳机",
+        "凑近",
+        "点头",
+        "伸出",
+        "拿过",
+        "分我",
+        "塞入",
+        "靠近",
+        "倾听",
+        "默许",
+        "闭上眼",
       ];
       // 普通同意词
       const normalAgreeKeywords = [
-        "好", "嗯", "行", "可以", "没问题", "ok", "yes", "sure", "fine", "好啊", "听听"
+        "好",
+        "嗯",
+        "行",
+        "可以",
+        "没问题",
+        "ok",
+        "yes",
+        "sure",
+        "fine",
+        "好啊",
+        "听听",
       ];
       // 拒绝词
       const rejectKeywords = [
-        "不想", "不要", "改天", "下次", "没空", "别吵", "自己听", "no thanks", "busy"
+        "不想",
+        "不要",
+        "改天",
+        "下次",
+        "没空",
+        "别吵",
+        "自己听",
+        "no thanks",
+        "busy",
       ];
 
-      const hasStrongAgree = strongAgreeKeywords.some((kw) => contentCombined.includes(kw));
-      const hasActionAgree = actionkeywords.some((kw) => contentCombined.includes(kw));
-      const hasNormalAgree = normalAgreeKeywords.some((kw) => contentCombined.includes(kw));
-      const hasReject = rejectKeywords.some((kw) => contentCombined.includes(kw));
+      const hasStrongAgree = strongAgreeKeywords.some((kw) =>
+        contentCombined.includes(kw)
+      );
+      const hasActionAgree = actionkeywords.some((kw) =>
+        contentCombined.includes(kw)
+      );
+      const hasNormalAgree = normalAgreeKeywords.some((kw) =>
+        contentCombined.includes(kw)
+      );
+      const hasReject = rejectKeywords.some((kw) =>
+        contentCombined.includes(kw)
+      );
 
-      console.log(`🎵 [判定] 强同意:${hasStrongAgree}, 动作:${hasActionAgree}, 普通:${hasNormalAgree}, 拒绝:${hasReject}`);
+      console.log(
+        `🎵 [判定] 强同意:${hasStrongAgree}, 动作:${hasActionAgree}, 普通:${hasNormalAgree}, 拒绝:${hasReject}`
+      );
 
       if (hasStrongAgree || hasActionAgree || (hasNormalAgree && !hasReject)) {
         console.log("✅ 启动共听模式...");
@@ -513,7 +610,10 @@ export default function ChatPage({ params }: PageProps) {
         setTimeout(() => {
           setMessages((prev) => {
             const lastMsg = prev[prev.length - 1];
-            if (lastMsg.type === "system_notice" && lastMsg.content.includes("进入共听")) {
+            if (
+              lastMsg.type === "system_notice" &&
+              lastMsg.content.includes("进入共听")
+            ) {
               return prev;
             }
 
@@ -538,7 +638,10 @@ export default function ChatPage({ params }: PageProps) {
             newMsgs.push(sysMsg);
 
             if (conversationId) {
-              localStorage.setItem(`chat_${conversationId}`, JSON.stringify(newMsgs));
+              localStorage.setItem(
+                `chat_${conversationId}`,
+                JSON.stringify(newMsgs)
+              );
             }
             return newMsgs;
           });
@@ -576,40 +679,53 @@ export default function ChatPage({ params }: PageProps) {
     if (selectedIds.size === 0) return;
     const selectedMsgs = messages.filter((m) => selectedIds.has(m.id));
     if (!conversationId) return;
-    
-    // ... (保持原有的 handleSaveToMemory 逻辑) ...
-    // 为了代码简洁，假设逻辑与你提供的一致，这里主要调用 localstorage 逻辑
     const contactsStr = localStorage.getItem("contacts");
     if (!contactsStr) return;
     try {
-        const contacts = JSON.parse(contactsStr);
-        const updatedContacts = contacts.map((c: any) => {
-            if (String(c.id) === String(conversationId)) {
-                let existingData = c.permanentMemory || [];
-                if (Array.isArray(existingData) && existingData.length > 0 && !existingData[0].items) {
-                    existingData = [{ id: "default_group", title: "默认分组", items: existingData }];
-                } else if (existingData.length === 0) {
-                    existingData = [{ id: "default_group", title: "未分类收藏", items: [] }];
-                }
-                const newMemories = selectedMsgs.map((msg) => ({
-                    id: msg.id,
-                    content: msg.content,
-                    date: new Date().toISOString(),
-                    source: "chat_selection",
-                }));
-                const targetGroup = existingData[0];
-                const contentSet = new Set(targetGroup.items.map((m: any) => m.content));
-                const uniqueNewMemories = newMemories.filter((m) => !contentSet.has(m.content));
-                targetGroup.items = [...targetGroup.items, ...uniqueNewMemories];
-                return { ...c, permanentMemory: existingData };
-            }
-            return c;
-        });
-        localStorage.setItem("contacts", JSON.stringify(updatedContacts));
-        window.dispatchEvent(new CustomEvent("chat_updated", { detail: { conversationId } }));
-        alert(`已保存 ${selectedMsgs.length} 条记忆`);
-        exitSelectionMode();
-    } catch(e) { alert("保存失败"); }
+      const contacts = JSON.parse(contactsStr);
+      const updatedContacts = contacts.map((c: any) => {
+        if (String(c.id) === String(conversationId)) {
+          let existingData = c.permanentMemory || [];
+          if (
+            Array.isArray(existingData) &&
+            existingData.length > 0 &&
+            !existingData[0].items
+          ) {
+            existingData = [
+              { id: "default_group", title: "默认分组", items: existingData },
+            ];
+          } else if (existingData.length === 0) {
+            existingData = [
+              { id: "default_group", title: "未分类收藏", items: [] },
+            ];
+          }
+          const newMemories = selectedMsgs.map((msg) => ({
+            id: msg.id,
+            content: msg.content,
+            date: new Date().toISOString(),
+            source: "chat_selection",
+          }));
+          const targetGroup = existingData[0];
+          const contentSet = new Set(
+            targetGroup.items.map((m: any) => m.content)
+          );
+          const uniqueNewMemories = newMemories.filter(
+            (m) => !contentSet.has(m.content)
+          );
+          targetGroup.items = [...targetGroup.items, ...uniqueNewMemories];
+          return { ...c, permanentMemory: existingData };
+        }
+        return c;
+      });
+      localStorage.setItem("contacts", JSON.stringify(updatedContacts));
+      window.dispatchEvent(
+        new CustomEvent("chat_updated", { detail: { conversationId } })
+      );
+      alert(`已保存 ${selectedMsgs.length} 条记忆`);
+      exitSelectionMode();
+    } catch (e) {
+      alert("保存失败");
+    }
   };
 
   const handleBatchDelete = () => {
@@ -618,7 +734,10 @@ export default function ChatPage({ params }: PageProps) {
       const newMessages = messages.filter((m) => !selectedIds.has(m.id));
       setMessages(newMessages);
       if (conversationId) {
-        localStorage.setItem(`chat_${conversationId}`, JSON.stringify(newMessages));
+        localStorage.setItem(
+          `chat_${conversationId}`,
+          JSON.stringify(newMessages)
+        );
       }
       exitSelectionMode();
     }
@@ -712,7 +831,9 @@ export default function ChatPage({ params }: PageProps) {
 
     if (isReadyToSendToAI || inviteCard) {
       if (replyTimerRef.current) clearTimeout(replyTimerRef.current);
+
       const delay = inviteCard || type === "focus_share" ? 1000 : 4000;
+
       replyTimerRef.current = setTimeout(() => {
         setMessages((currentMsgs) => {
           if (conversationId && contactInfo) {
@@ -748,11 +869,40 @@ export default function ChatPage({ params }: PageProps) {
         } catch (e) {}
       }
     }, 300);
+
     return () => clearTimeout(timer);
   }, [conversationId]);
 
-  // --- 挂载检查 ---
+  // --- 挂载检查 (防白屏) ---
   if (!mounted) return <div className="min-h-screen bg-gray-50" />;
+
+  // 🔥🔥🔥 紧急自救界面 🔥🔥🔥
+  if (hasError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-white p-6 text-center z-50 fixed inset-0">
+        <AlertTriangle className="w-16 h-16 text-red-500 mb-4" />
+        <h2 className="text-xl font-bold text-gray-800 mb-2">
+          页面遇到严重错误
+        </h2>
+        <p className="text-sm text-gray-500 mb-8 max-w-xs">
+          检测到聊天记录数据损坏导致页面崩溃。请尝试自动修复。
+        </p>
+        <button
+          onClick={emergencyClear}
+          className="bg-red-500 text-white px-6 py-3 rounded-full font-bold shadow-lg active:scale-95 transition flex items-center gap-2"
+        >
+          <Trash2 className="w-5 h-5" />
+          清空此对话并恢复
+        </button>
+        <button
+          onClick={() => (window.location.href = "/")}
+          className="mt-6 text-gray-400 text-sm underline"
+        >
+          返回首页
+        </button>
+      </div>
+    );
+  }
 
   const getHeaderStatus = () => {
     if (aiStatus === "thinking") return "对方正在输入...";
@@ -882,8 +1032,8 @@ export default function ChatPage({ params }: PageProps) {
         <div
           className="absolute bottom-[80px] right-4 z-30 cursor-pointer animate-in fade-in slide-in-from-bottom-2 zoom-in-95 duration-200"
           onClick={() => {
-            isUserInteracting.current = false;
-            scrollToBottom("smooth");
+            isUserInteracting.current = false; // 点击按钮，解除交互锁
+            scrollToBottom("smooth"); // 主动点击，可以使用平滑滚动
           }}
         >
           <div className="bg-white text-[#07c160] shadow-md rounded-full p-2 border border-[#07c160]/20 flex items-center justify-center hover:bg-green-50 transition-colors active:scale-90">
@@ -898,6 +1048,7 @@ export default function ChatPage({ params }: PageProps) {
           isLoading={aiStatus === "thinking" || aiStatus === "typing"}
           onInputChange={setInput}
           onSendText={() => handleUserSend(input, "text")}
+          // 🔥 绑定输入法状态 🔥
           onCompositionStart={() => setIsComposing(true)}
           onCompositionEnd={() => setIsComposing(false)}
           onPanelChange={(isOpen) => {
