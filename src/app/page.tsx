@@ -303,7 +303,13 @@ export default function HomePage() {
   const { settings } = useMyTheme();
   const [avatar, setAvatar] = useState<string>("");
 
+  // 👇👇👇 新增：添加已挂载状态 👇👇👇
+  const [mounted, setMounted] = useState(false);
+
   useEffect(() => {
+    setMounted(true); // 组件挂载后，标记为 true
+    
+    // 原有的头像加载逻辑
     if (typeof window !== "undefined") {
       try {
         const profileStr = localStorage.getItem("user_profile_v4");
@@ -314,6 +320,12 @@ export default function HomePage() {
       } catch (e) {}
     }
   }, []);
+
+  // 👇👇👇 新增：如果还没挂载，返回空或者是加载占位符 👇👇👇
+  // 这样可以确保服务器端和客户端初始渲染一致（都是空的），防止报错
+  if (!mounted) {
+    return <div className="min-h-screen bg-gray-100" />;
+  }
 
   return (
     <div
@@ -499,3 +511,4 @@ export default function HomePage() {
     </div>
   );
 }
+
