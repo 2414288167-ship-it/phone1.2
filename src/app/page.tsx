@@ -14,8 +14,8 @@ import {
   Users,
   ShoppingBag,
   Music,
-  Clock, // ✨ 新增
-  Repeat, // ✨ 新增
+  Clock,
+  Repeat,
 } from "lucide-react";
 import { useMyTheme } from "../lib/MyTheme";
 
@@ -78,54 +78,64 @@ const ClockWidget = () => {
   );
 };
 
-// --- ✨✨✨ 重点修改：ToDoWidget ✨✨✨ ---
 const ToDoWidget = () => {
-  // 1. 同步最新的任务结构
   interface Task {
     id: string;
     text: string;
     done: boolean;
     type: string;
     completedAt?: number;
-    startTime?: string; // ✨ 新增
-    endTime?: string; // ✨ 新增
-    isDaily?: boolean; // ✨ 新增
+    startTime?: string;
+    endTime?: string;
+    isDaily?: boolean;
   }
 
   const [items, setItems] = useState<Task[]>([]);
 
+  // 🔥 修复：增加 try-catch 防止坏数据导致崩溃
   const loadTasks = () => {
     if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("my_focus_tasks");
-      if (saved) {
-        let parsedTasks: Task[] = JSON.parse(saved);
-
-        // 2. ✨ 添加每日任务跨天重置逻辑 (与 FocusPage 保持一致)
-        // 这样即使用户先打开首页，每日任务的状态也是正确的
-        const todayStr = new Date().toDateString();
-        let hasUpdates = false;
-
-        parsedTasks = parsedTasks.map((t) => {
-          if (t.isDaily && t.done && t.completedAt) {
-            const taskDate = new Date(t.completedAt).toDateString();
-            if (taskDate !== todayStr) {
-              hasUpdates = true;
-              return { ...t, done: false, completedAt: undefined };
-            }
+      try {
+        const saved = localStorage.getItem("my_focus_tasks");
+        if (saved) {
+          let parsedTasks: Task[] = JSON.parse(saved);
+          
+          // 安全检查：确保解析出来的是数组
+          if (!Array.isArray(parsedTasks)) {
+            parsedTasks = [];
           }
-          return t;
-        });
 
-        setItems(parsedTasks);
+          const todayStr = new Date().toDateString();
+          let hasUpdates = false;
 
-        // 如果发生了重置，回写到 localStorage
-        if (hasUpdates) {
-          localStorage.setItem("my_focus_tasks", JSON.stringify(parsedTasks));
+          parsedTasks = parsedTasks.map((t) => {
+            // 安全检查：防止 t 为 null
+            if (!t) return { id: Math.random().toString(), text: "Err", done: false, type: "u-i" };
+
+            if (t.isDaily && t.done && t.completedAt) {
+              const taskDate = new Date(t.completedAt).toDateString();
+              if (taskDate !== todayStr) {
+                hasUpdates = true;
+                return { ...t, done: false, completedAt: undefined };
+              }
+            }
+            return t;
+          });
+
+          setItems(parsedTasks);
+
+          if (hasUpdates) {
+            localStorage.setItem("my_focus_tasks", JSON.stringify(parsedTasks));
+          }
+        } else {
+          setItems([
+            { id: "1", text: "保持好心情 ✨", done: false, type: "u-ni" },
+          ]);
         }
-      } else {
-        setItems([
-          { id: "1", text: "保持好心情 ✨", done: false, type: "u-ni" },
-        ]);
+      } catch (e) {
+        console.error("加载任务失败，重置数据", e);
+        setItems([]);
+        localStorage.removeItem("my_focus_tasks"); // 清除坏数据
       }
     }
   };
@@ -136,13 +146,12 @@ const ToDoWidget = () => {
         ? {
             ...item,
             done: !item.done,
-            completedAt: !item.done ? Date.now() : undefined, // ✨ 更新完成时间
+            completedAt: !item.done ? Date.now() : undefined,
           }
         : item
     );
     setItems(newItems);
     localStorage.setItem("my_focus_tasks", JSON.stringify(newItems));
-    // 触发全局事件，通知 AI 和其他页面
     window.dispatchEvent(new Event("local-storage-update"));
   };
 
@@ -169,7 +178,9 @@ const ToDoWidget = () => {
       >
         To Do List
       </Link>
-      <div className="flex-1 flex flex-col gap-2 z-10 overflow-y-auto max-h-[140px] pr-1 no-scrollbar">
+      
+      {/* 底部留出空间给 absolute 的统计条 */}
+      <div className="flex-1 flex flex-col gap-2 z-10 overflow-y-auto max-h-[140px] pr-1 no-scrollbar pb-14">
         {items.length === 0 ? (
           <div className="text-xs text-gray-500 text-center py-4">
             暂无任务，点击标题添加
@@ -177,55 +188,41 @@ const ToDoWidget = () => {
         ) : (
           items.slice(0, 5).map((item, i) => (
             <div
-              key={item.id || i}
+              key={item?.id || i}
               className="flex items-start justify-between text-sm text-gray-700 font-medium group cursor-pointer hover:bg-white/30 p-1 rounded-lg transition-colors"
-              onClick={() => toggleDone(item.id)}
+              onClick={() => item && toggleDone(item.id)}
             >
               <div
                 className={`flex flex-col gap-0.5 transition flex-1 min-w-0 ${
-                  item.done ? "opacity-50" : ""
+                  item?.done ? "opacity-50" : ""
                 }`}
               >
                 <div className="flex items-center gap-2">
-                  <span
-                    className={`text-[10px] shrink-0 ${
-                      item.done
-                        ? "text-gray-400"
-                        : "text-blue-400 drop-shadow-sm"
-                    }`}
-                  >
+                  <span className={`text-[10px] shrink-0 ${item?.done ? "text-gray-400" : "text-blue-400 drop-shadow-sm"}`}>
                     ●
                   </span>
-                  <span
-                    className={`truncate ${item.done ? "line-through" : ""}`}
-                  >
-                    {item.text}
+                  <span className={`truncate ${item?.done ? "line-through" : ""}`}>
+                    {item?.text || "未命名"}
                   </span>
-                  {/* ✨ 显示每日循环图标 */}
-                  {item.isDaily && (
-                    <Repeat className="w-3 h-3 text-gray-400 shrink-0" />
-                  )}
+                  {item?.isDaily && <Repeat className="w-3 h-3 text-gray-400 shrink-0" />}
                 </div>
-
-                {/* ✨ 显示时间范围 */}
-                {(item.startTime || item.endTime) && !item.done && (
+                
+                {(item?.startTime || item?.endTime) && !item?.done && (
                   <div className="flex items-center gap-1 text-[10px] text-gray-500 ml-4 bg-white/40 w-fit px-1.5 rounded">
                     <Clock className="w-3 h-3" />
-                    <span>
-                      {item.startTime || "..."}-{item.endTime || "..."}
-                    </span>
+                    <span>{item.startTime || "..."}-{item.endTime || "..."}</span>
                   </div>
                 )}
               </div>
 
               <div
                 className={`w-4 h-4 border-2 rounded flex items-center justify-center transition shrink-0 mt-0.5 ${
-                  item.done
+                  item?.done
                     ? "bg-blue-400 border-blue-400"
                     : "border-gray-400/50"
                 }`}
               >
-                {item.done && (
+                {item?.done && (
                   <span className="text-white text-xs font-bold">✓</span>
                 )}
               </div>
@@ -233,9 +230,10 @@ const ToDoWidget = () => {
           ))
         )}
       </div>
-      <div className="mt-2 relative h-12 w-full opacity-90 shrink-0">
-        <div className="absolute inset-0 bg-blue-200/40 rotate-2 transform rounded flex items-center justify-center text-blue-800 font-bold text-sm">
-          {items.filter((i) => i.done).length}/{items.length} 完成
+
+      <div className="absolute bottom-4 left-4 right-4 h-10 opacity-95 z-20">
+        <div className="w-full h-full bg-blue-200/50 rotate-1 transform rounded-xl flex items-center justify-center text-blue-800 font-bold text-sm backdrop-blur-md shadow-sm transition-transform hover:rotate-0 hover:scale-105 active:scale-95 cursor-pointer border border-white/40">
+          {items.filter((i) => i?.done).length}/{items.length} 完成
         </div>
       </div>
     </GlassCard>
@@ -273,6 +271,7 @@ const WeatherBatteryWidget = () => {
         <span className="text-xs font-bold text-gray-700">能量 78%</span>
       </div>
       <div className="h-8 w-full rounded-lg bg-blue-100/50 overflow-hidden relative mt-1">
+        {/* 🔥 修复：使用 https 网络图片，而不是 \icons\ 这种本地非法路径 */}
         <img
           src="https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=200&q=80"
           className="w-full h-full object-cover opacity-80"
@@ -299,17 +298,21 @@ const AppIcon = ({ icon: Icon, color, name, href = "#" }: any) => (
 );
 
 export default function HomePage() {
-  const { totalUnread } = useUnread();
-  const { settings } = useMyTheme();
-  const [avatar, setAvatar] = useState<string>("");
+  // 🔥 修复：安全获取 context，防止未提供 Provider 时崩溃
+  const themeContext = useMyTheme();
+  const unreadContext = useUnread();
 
-  // 👇👇👇 新增：添加已挂载状态 👇👇👇
+  // 安全解构：如果 context 为空，给默认值
+  const settings = themeContext?.settings || { homeWallpaper: "", nightMode: false };
+  const totalUnread = unreadContext?.totalUnread || 0;
+
+  const [avatar, setAvatar] = useState<string>("");
+  
+  // 🔥 修复：增加 mounted 状态，强制只在客户端渲染，解决水合错误
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true); // 组件挂载后，标记为 true
-    
-    // 原有的头像加载逻辑
+    setMounted(true); // 挂载后显示内容
     if (typeof window !== "undefined") {
       try {
         const profileStr = localStorage.getItem("user_profile_v4");
@@ -321,8 +324,7 @@ export default function HomePage() {
     }
   }, []);
 
-  // 👇👇👇 新增：如果还没挂载，返回空或者是加载占位符 👇👇👇
-  // 这样可以确保服务器端和客户端初始渲染一致（都是空的），防止报错
+  // 🚨 关键：如果是服务端渲染阶段，返回空，避免不匹配报错
   if (!mounted) {
     return <div className="min-h-screen bg-gray-100" />;
   }
@@ -373,16 +375,18 @@ export default function HomePage() {
               <ToDoWidget />
             </div>
             <div className="grid grid-cols-2 gap-4 justify-items-center mt-2">
-              {/* --- 预设 APP (图片版) --- */}
+              {/* --- 预设 APP --- */}
               <Link
                 href="/preset"
                 className="flex flex-col items-center gap-1 group"
               >
-                <div className="w-[3.5rem] h-[3.5rem] rounded-2xl flex items-center justify-center shadow-md transition-transform group-active:scale-95 relative overflow-hidden p-1">
+                <div className="w-[3.5rem] h-[3.5rem] rounded-2xl flex items-center justify-center shadow-md transition-transform group-active:scale-95 relative overflow-hidden p-1 bg-white">
+                  {/* 🔥 修复：路径改为正斜杠 / */}
                   <img
-                    src="\icons\博学猫.png"
+                    src="/icons/博学猫.png"
                     className="w-full h-full object-contain"
                     alt="预设"
+                    onError={(e) => e.currentTarget.style.display = 'none'} 
                   />
                 </div>
                 <span className="text-xs text-white font-medium drop-shadow-md">
@@ -390,7 +394,7 @@ export default function HomePage() {
                 </span>
               </Link>
 
-              {/* --- 音乐 APP (图片版) --- */}
+              {/* --- 音乐 APP --- */}
               <Link
                 href="/music"
                 className="flex flex-col items-center gap-1 group relative"
@@ -398,9 +402,10 @@ export default function HomePage() {
                 <div className="relative">
                   <div className="w-14 h-14 rounded-2xl bg-white flex items-center justify-center shadow-md transition-transform group-active:scale-95 overflow-hidden">
                     <img
-                      src="\icons\网易云音乐.png"
+                      src="/icons/网易云音乐.png"
                       className="w-full h-full object-cover scale-110"
                       alt="音乐"
+                      onError={(e) => e.currentTarget.style.display = 'none'}
                     />
                   </div>
                 </div>
@@ -413,11 +418,12 @@ export default function HomePage() {
                 href="/focus"
                 className="flex flex-col items-center gap-1 group"
               >
-                <div className="w-[3.5rem] h-[3.5rem] rounded-2xl flex items-center justify-center shadow-md transition-transform group-active:scale-95 relative overflow-hidden p-1">
+                <div className="w-[3.5rem] h-[3.5rem] rounded-2xl flex items-center justify-center shadow-md transition-transform group-active:scale-95 relative overflow-hidden p-1 bg-white">
                   <img
-                    src="\icons\波斯猫.png"
+                    src="/icons/波斯猫.png"
                     className="w-full h-full object-contain"
                     alt="专注闹钟"
+                    onError={(e) => e.currentTarget.style.display = 'none'}
                   />
                 </div>
                 <span className="text-xs text-white font-medium drop-shadow-md">
@@ -442,20 +448,10 @@ export default function HomePage() {
               >
                 <div className="relative">
                   <div className="w-14 h-14 rounded-2xl bg-white flex items-center justify-center shadow-md transition-transform group-active:scale-95 overflow-hidden">
-                    <svg
-                      viewBox="0 0 1024 1024"
-                      version="1.1"
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="w-full h-full scale-125"
-                    >
-                      <path
-                        d="M503.552 406.95808c16.89088 0 27.648-10.84928 27.648-27.13088 0-17.05472-10.75712-27.13088-27.648-27.13088-16.128 0-31.488 10.07616-31.488 27.13088 0 16.28672 15.36 27.13088 31.488 27.13088zM351.48288 352.69632c-16.12288 0-33.024 10.07616-33.024 27.13088 0 16.2816 16.896 27.136 33.024 27.136 15.36 0 27.648-10.8544 27.648-27.136 0.00512-17.05472-12.28288-27.13088-27.648-27.13088zM574.20288 511.616c-10.752 0-21.504 10.07104-21.504 22.48192 0 10.07104 10.752 20.1472 21.504 20.1472 16.128 0 27.648-10.07616 27.648-20.1472 0.00512-12.40576-11.51488-22.48192-27.648-22.48192zM694.77888 511.616c-11.51488 0-21.504 10.07104-21.504 22.48192 0 10.07104 9.984 20.1472 21.504 20.1472 15.36 0 26.88512-10.07616 26.88512-20.1472 0-12.40576-11.52512-22.48192-26.88512-22.48192z"
-                        fill="#2AAE67"
-                      />
-                      <path
-                        d="M849.92 51.2H174.08c-67.8656 0-122.88 55.0144-122.88 122.88v675.84c0 67.8656 55.0144 122.88 122.88 122.88h675.84c67.8656 0 122.88-55.0144 122.88-122.88V174.08c0-67.8656-55.0144-122.88-122.88-122.88zM422.912 632.54016c-28.416 0-49.15712-4.64896-76.03712-12.40576l-77.568 39.54176 22.27712-66.66752C237.06112 554.25536 204.8 505.41056 204.8 445.7216c0-105.42592 98.304-186.04032 218.112-186.04032 105.984 0 200.45312 63.5648 218.88 153.49248-7.68-1.55648-14.592-2.3296-20.736-2.3296-104.44288 0-185.08288 79.06816-185.08288 174.4128 0 16.27648 2.304 31.00672 6.144 46.5152-6.144 0.768-13.06112 0.768-19.20512 0.768z m320.25088 75.96544l15.36 55.81312-58.368-33.3312c-22.26688 4.64896-43.776 11.62752-66.04288 11.62752-102.912 0-184.32-71.31648-184.32-159.68256s81.408-159.68768 184.32-159.68768c97.536 0 185.088 71.31648 185.088 159.68768 0 49.60768-33.024 93.78816-76.03712 125.57312z"
-                        fill="#2AAE67"
-                      />
+                    {/* SVG 微信图标保持不变 */}
+                    <svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" className="w-full h-full scale-125">
+                      <path d="M503.552 406.95808c16.89088 0 27.648-10.84928 27.648-27.13088 0-17.05472-10.75712-27.13088-27.648-27.13088-16.128 0-31.488 10.07616-31.488 27.13088 0 16.28672 15.36 27.13088 31.488 27.13088zM351.48288 352.69632c-16.12288 0-33.024 10.07616-33.024 27.13088 0 16.2816 16.896 27.136 33.024 27.136 15.36 0 27.648-10.8544 27.648-27.136 0.00512-17.05472-12.28288-27.13088-27.648-27.13088zM574.20288 511.616c-10.752 0-21.504 10.07104-21.504 22.48192 0 10.07104 10.752 20.1472 21.504 20.1472 16.128 0 27.648-10.07616 27.648-20.1472 0.00512-12.40576-11.51488-22.48192-27.648-22.48192zM694.77888 511.616c-11.51488 0-21.504 10.07104-21.504 22.48192 0 10.07104 9.984 20.1472 21.504 20.1472 15.36 0 26.88512-10.07616 26.88512-20.1472 0-12.40576-11.52512-22.48192-26.88512-22.48192z" fill="#2AAE67" />
+                      <path d="M849.92 51.2H174.08c-67.8656 0-122.88 55.0144-122.88 122.88v675.84c0 67.8656 55.0144 122.88 122.88 122.88h675.84c67.8656 0 122.88-55.0144 122.88-122.88V174.08c0-67.8656-55.0144-122.88-122.88-122.88zM422.912 632.54016c-28.416 0-49.15712-4.64896-76.03712-12.40576l-77.568 39.54176 22.27712-66.66752C237.06112 554.25536 204.8 505.41056 204.8 445.7216c0-105.42592 98.304-186.04032 218.112-186.04032 105.984 0 200.45312 63.5648 218.88 153.49248-7.68-1.55648-14.592-2.3296-20.736-2.3296-104.44288 0-185.08288 79.06816-185.08288 174.4128 0 16.27648 2.304 31.00672 6.144 46.5152-6.144 0.768-13.06112 0.768-19.20512 0.768z m320.25088 75.96544l15.36 55.81312-58.368-33.3312c-22.26688 4.64896-43.776 11.62752-66.04288 11.62752-102.912 0-184.32-71.31648-184.32-159.68256s81.408-159.68768 184.32-159.68768c97.536 0 185.088 71.31648 185.088 159.68768 0 49.60768-33.024 93.78816-76.03712 125.57312z" fill="#2AAE67" />
                     </svg>
                   </div>
                   {totalUnread > 0 && (
@@ -474,11 +470,12 @@ export default function HomePage() {
                 href="/notes"
                 className="flex flex-col items-center gap-1 group"
               >
-                <div className="w-[3.5rem] h-[3.5rem] rounded-2xl flex items-center justify-center shadow-md transition-transform group-active:scale-95 relative overflow-hidden p-1">
+                <div className="w-[3.5rem] h-[3.5rem] rounded-2xl flex items-center justify-center shadow-md transition-transform group-active:scale-95 relative overflow-hidden p-1 bg-white">
                   <img
-                    src="\icons\橘猫.png"
+                    src="/icons/橘猫.png"
                     className="w-full h-full object-contain"
                     alt="世界书"
+                    onError={(e) => e.currentTarget.style.display = 'none'}
                   />
                 </div>
                 <span className="text-xs text-white font-medium drop-shadow-md">
@@ -511,4 +508,3 @@ export default function HomePage() {
     </div>
   );
 }
-
