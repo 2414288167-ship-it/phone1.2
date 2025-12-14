@@ -19,6 +19,7 @@ import {
   X,
   BookMarked,
   Music,
+  ChevronDown, // 🔥 新增：用于“回到底部”按钮图标
 } from "lucide-react";
 import { useAI } from "@/context/AIContext";
 import { useUnread } from "@/context/UnreadContext";
@@ -169,14 +170,21 @@ export default function ChatPage({ params }: PageProps) {
   // 🔥 新增：是否正在录音 (用于判断交互状态)
   const [isRecording, setIsRecording] = useState(false);
 
+  // --- 🔥🔥🔥 滚动控制核心 Ref (修复版) 🔥🔥🔥 ---
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const replyTimerRef = useRef<NodeJS.Timeout | null>(null);
   const prevMessagesLength = useRef(0);
-  const isAutoScrolling = useRef(true); // 是否允许自动滚动
-  const isUserInteracting = useMemo(() => {
-    return input.length > 0 || isPanelOpen || isRecording;
-  }, [input, isPanelOpen, isRecording]);
+
+  // isSticky: 标记"当前是否应该跟随到底部"。默认 true (跟随)
+  const isSticky = useRef(true);
+  // isUserInteracting: 标记"用户正在操作"。如果为 true，强行暂停自动滚动
+  const isUserInteracting = useRef(false);
+  // 交互锁定时器
+  const interactionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // 是否显示回到底部按钮
+  const [showScrollButton, setShowScrollButton] = useState(false);
+
   // 获取 AI 状态
   const aiStatus = conversationId ? getChatState(conversationId) : "idle";
 
@@ -263,7 +271,6 @@ export default function ChatPage({ params }: PageProps) {
   }, [conversationId, reloadMessages, clearUnread]);
 
   // 🔥🔥🔥 核心修复 1：主动轮询消息 🔥🔥🔥
-  // 解决 AI 发消息不刷新的问题。当 AI 处于思考或打字状态时，每 0.5 秒同步一次 LocalStorage
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
     if (aiStatus === "thinking" || aiStatus === "typing") {
@@ -277,11 +284,9 @@ export default function ChatPage({ params }: PageProps) {
   }, [aiStatus, reloadMessages]);
 
   // 🔥🔥🔥 核心修复 2：状态结束兜底 🔥🔥🔥
-  // 确保 AI 回复完成瞬间（从 busy 变 idle），强制再刷新一次，防止漏掉最后的内容
   const prevAiStatus = useRef(aiStatus);
   useEffect(() => {
     if (prevAiStatus.current !== "idle" && aiStatus === "idle") {
-      // 延时一点点确保 storage 写入完毕
       setTimeout(() => {
         reloadMessages();
       }, 200);
@@ -289,7 +294,7 @@ export default function ChatPage({ params }: PageProps) {
     prevAiStatus.current = aiStatus;
   }, [aiStatus, reloadMessages]);
 
-  // 监听 chat_updated 事件来更新消息 (作为辅助触发)
+  // 监听 chat_updated 事件
   useEffect(() => {
     const handleUpdate = (e: CustomEvent) => {
       if (String(e.detail.conversationId) === String(conversationId)) {
@@ -302,7 +307,7 @@ export default function ChatPage({ params }: PageProps) {
       window.removeEventListener("chat_updated" as any, handleUpdate);
   }, [conversationId, reloadMessages, clearUnread]);
 
-  // 初始化加载
+  // 初始化加载 (保留原逻辑)
   useEffect(() => {
     if (conversationId) {
       const saved = localStorage.getItem(`chat_${conversationId}`);
@@ -331,32 +336,83 @@ export default function ChatPage({ params }: PageProps) {
     }
   }, [messages, conversationId]);
 
-  // --- 3. 智能滚动逻辑 ---
+  // --- 🔥🔥🔥 核心修复：滚动逻辑全重写 🔥🔥🔥 ---
+
+  // 1. 滚动到底部 (执行者)
+  const scrollToBottom = (behavior: "smooth" | "auto" = "auto") => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTo({
+        top: scrollContainerRef.current.scrollHeight,
+        behavior: behavior,
+      });
+      // 只要触发了强制到底，就恢复锁定 (除非用户正在按着屏幕)
+      if (!isUserInteracting.current) {
+        isSticky.current = true;
+        setShowScrollButton(false);
+      }
+    }
+  };
+
+  // 2. 监听用户交互 (防抖) - 解决“一动就跳回底部”的问题
+  const handleUserInteraction = () => {
+    isUserInteracting.current = true;
+    // 同时也暂时解除锁定，防止手指一停就被拽回去
+    isSticky.current = false;
+
+    if (interactionTimeoutRef.current) {
+      clearTimeout(interactionTimeoutRef.current);
+    }
+    // 1秒后如果没有后续操作，认为交互结束
+    interactionTimeoutRef.current = setTimeout(() => {
+      isUserInteracting.current = false;
+    }, 1000);
+  };
+
+  // 3. 滚动位置监听 (计算是否应该吸附)
   const handleScroll = () => {
     if (!scrollContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } =
       scrollContainerRef.current;
-    const distanceToBottom = scrollHeight - scrollTop - clientHeight;
-    isAutoScrolling.current = distanceToBottom < 100;
+
+    // 物理距离
+    const distance = scrollHeight - scrollTop - clientHeight;
+    // 阈值：50px (增加容错)
+    if (distance > 50) {
+      isSticky.current = false;
+      setShowScrollButton(true);
+    } else if (distance < 10) {
+      isSticky.current = true;
+      setShowScrollButton(false);
+    }
   };
 
+  // 4. 替代旧的 useLayoutEffect，使用更智能的滚动触发
+  // 监听 messages, aiStatus 和 音乐状态
+  useEffect(() => {
+    // 只有当：1. 之前处于吸附状态  AND  2. 用户现在没按着屏幕
+    if (isSticky.current && !isUserInteracting.current && !isSelectionMode) {
+      // 使用 auto (瞬移)，防止动画冲突，让新消息平稳出现
+      scrollToBottom("auto");
+    }
+  }, [messages, aiStatus, currentSong]); // 🔥 添加 currentSong 依赖，防止切歌时乱跳
+
+  // (保留原有的 prevMessagesLength 逻辑用于非流式更新的首次加载)
   useLayoutEffect(() => {
     if (messages.length > prevMessagesLength.current) {
-      const lastMsg = messages[messages.length - 1];
-      if (lastMsg?.role === "user" || isAutoScrolling.current) {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      // 首次加载或非流式大更新时，如果不需要吸附，则不操作
+      if (isSticky.current && !isUserInteracting.current) {
+        scrollToBottom("auto");
       }
     }
     prevMessagesLength.current = messages.length;
   }, [messages]);
 
-  // --- 🔥🔥🔥 核心逻辑：智能计时器 🔥🔥🔥 ---
+  // --- 🔥🔥🔥 智能计时器逻辑 🔥🔥🔥 ---
   useEffect(() => {
-    // 1. 任何状态变化，先把旧计时器清了 (暂停)
     if (replyTimerRef.current) clearTimeout(replyTimerRef.current);
 
-    // 2. 如果用户正在交互，绝对不触发，直接返回 (等用户忙完)
-    if (isUserInteracting) {
+    // 2. 如果用户正在交互，绝对不触发
+    if (input.length > 0 || isPanelOpen || isRecording) {
       console.log("⏳ 用户正在交互 (打字/选图/录音)，计时暂停...");
       return;
     }
@@ -364,10 +420,9 @@ export default function ChatPage({ params }: PageProps) {
     if (messages.length === 0) return;
     const lastMsg = messages[messages.length - 1];
 
-    // 3. 只有当“最后一条是用户发的” 且 “状态是 sent” 时，才开始倒计时
     if (lastMsg.role === "user" && lastMsg.status === "sent") {
       const isInvite = lastMsg.type === "music_invite";
-      const isFocusShare = lastMsg.type === "focus_share"; // 🔥 专注卡片无需长时间等待
+      const isFocusShare = lastMsg.type === "focus_share";
       const delay = isInvite || isFocusShare ? 1000 : 4000;
 
       console.log(`⏱️ 用户停止交互，开始倒计时 ${delay}ms ...`);
@@ -376,7 +431,7 @@ export default function ChatPage({ params }: PageProps) {
         triggerAI(messages);
       }, delay);
     }
-  }, [messages, isUserInteracting]); // 🔥 依赖：消息变了 OR 交互状态变了
+  }, [messages, input, isPanelOpen, isRecording]); // 依赖中包含了交互状态
 
   // 触发 AI
   const triggerAI = (currentMessages: Message[]) => {
@@ -406,7 +461,6 @@ export default function ChatPage({ params }: PageProps) {
       }
     }
 
-    // 🔥 增加对专注分享卡片的识别
     let focusPrompt = "";
     const lastMsg = currentMessages[currentMessages.length - 1];
     if (lastMsg.type === "focus_share") {
@@ -417,7 +471,7 @@ export default function ChatPage({ params }: PageProps) {
     if (presetContext) additionalPrompt += `\n${presetContext}`;
     if (worldBookContext) additionalPrompt += worldBookContext;
     if (musicPrompt) additionalPrompt += musicPrompt;
-    if (focusPrompt) additionalPrompt += focusPrompt; // 🔥 注入专注提示词
+    if (focusPrompt) additionalPrompt += focusPrompt;
 
     const enhancedContactInfo = {
       ...contactInfo,
@@ -669,7 +723,7 @@ export default function ChatPage({ params }: PageProps) {
     }
   };
 
-  // 🔥 升级版 handleUserSend：支持 extraData 参数
+  // 🔥 升级版 handleUserSend
   const handleUserSend = (
     text: string,
     type: string = "text",
@@ -678,15 +732,14 @@ export default function ChatPage({ params }: PageProps) {
     tempId?: string,
     imageDesc?: string,
     inviteCard?: boolean,
-    extraData?: any // 🔥 新增：额外数据 (用于专注卡片)
+    extraData?: any
   ) => {
     if (type === "text" && !text?.trim() && !inviteCard) return;
 
-    // 1. 更新 UI 和本地存储 (立即上屏 + 保存)
+    // 1. 更新 UI 和本地存储
     setMessages((prev) => {
       let newMessages = [...prev];
       if (tempId) {
-        // 语音识别完成，更新状态为 sent
         newMessages = newMessages.map((msg) =>
           msg.id === tempId
             ? { ...msg, content: text, status: "sent" as const }
@@ -703,7 +756,6 @@ export default function ChatPage({ params }: PageProps) {
           (inviteCard
             ? `(发送了音乐邀请卡片) 正在听：${currentSong?.title || "歌曲"}`
             : "");
-        // 如果是语音还没转完文字，状态是 sending
         const status = type === "audio" && !text ? "sending" : "sent";
 
         newMessages.push({
@@ -716,7 +768,7 @@ export default function ChatPage({ params }: PageProps) {
           audioUrl,
           status,
           alt: inviteCard ? currentSong?.cover : imageDesc,
-          extra: inviteCard ? { songTitle: currentSong?.title } : extraData, // 🔥 存入 extraData
+          extra: inviteCard ? { songTitle: currentSong?.title } : extraData,
         });
       }
       return newMessages;
@@ -724,6 +776,11 @@ export default function ChatPage({ params }: PageProps) {
     if (type === "text" && !inviteCard) setInput("");
     if (type === "audio" && !text) setIsRecording(true);
     if (type === "audio" && text) setIsRecording(false);
+
+    // 🔥 用户发送时，强制锁定并滚动
+    isSticky.current = true;
+    isUserInteracting.current = false;
+    setTimeout(() => scrollToBottom("smooth"), 100);
 
     // 2. 触发 AI 防抖逻辑
     const isReadyToSendToAI = !(type === "audio" && !text);
@@ -736,49 +793,9 @@ export default function ChatPage({ params }: PageProps) {
       replyTimerRef.current = setTimeout(() => {
         setMessages((currentMsgs) => {
           if (conversationId && contactInfo) {
-            const lastUserMsg = [...currentMsgs]
-              .reverse()
-              .find((m) => m.role === "user" && m.type !== "music_invite");
-            const textContext = lastUserMsg?.content || "";
-            const worldBookContext = getWorldBookContext(
-              textContext,
-              contactInfo.worldBookId
-            );
-            const presetContext = getPresetContext(contactInfo.presetId);
-
-            let musicPrompt = "";
-            if (currentSong) {
-              const songInfo = `"${currentSong.title}" by ${currentSong.artist}`;
-
-              if (inviteCard) {
-                musicPrompt = `\n[SYSTEM EVENT: MUSIC INVITATION]\nThe user sent a "Share Headphones" invitation card for the song: ${songInfo}.\n- Be yourself.\n- If you like the song or want to join, just say yes/okay/good naturally.\n- If you don't want to, refuse politely.`;
-              } else if (isSharedMode) {
-                musicPrompt = `\n[STATE: Shared Listening active] Playing: ${songInfo}. You are listening TOGETHER.`;
-              } else if (isPlaying) {
-                musicPrompt = `\n[STATE: User listening to ${songInfo} in bg]`;
-              }
-            }
-
-            // 🔥 再次确保 trigger 时的 Prompt 包含专注信息
-            let focusPrompt = "";
-            const lastMsg = currentMsgs[currentMsgs.length - 1];
-            if (lastMsg.type === "focus_share") {
-              focusPrompt = `\n[SYSTEM EVENT: FOCUS SUMMARY SHARE]\nThe user has just completed a focus/study session and shared the summary card.\n- Total duration: ${lastMsg.extra?.totalSeconds} seconds.\n- Task description: ${lastMsg.extra?.taskName}.\n- INSTRUCTION: Praise the user warmly and encourage them. You can ask what they learned or suggest a break. Be proud of them.`;
-            }
-
-            let additionalPrompt = "";
-            if (presetContext) additionalPrompt += `\n${presetContext}`;
-            if (worldBookContext) additionalPrompt += worldBookContext;
-            if (musicPrompt) additionalPrompt += musicPrompt;
-            if (focusPrompt) additionalPrompt += focusPrompt; // 🔥
-
-            const enhancedContactInfo = {
-              ...contactInfo,
-              aiPersona: (contactInfo.aiPersona || "") + additionalPrompt,
-            };
-
-            console.log("🚀 触发 AI 回复...");
-            requestAIReply(conversationId, enhancedContactInfo, currentMsgs);
+            // (复用 triggerAI 的逻辑，这里为了保持闭包最新，仍需手动构建一次)
+            // 为简化，直接调用我们提取出来的 triggerAI 函数
+            triggerAI(currentMsgs);
           }
           return currentMsgs;
         });
@@ -786,17 +803,15 @@ export default function ChatPage({ params }: PageProps) {
     }
   };
 
-  // 🔥🔥🔥 核心修复：增加 setTimeout 延迟，防止被历史消息加载覆盖 🔥🔥🔥
+  // 延迟发送 pending_share_message
   useEffect(() => {
     const timer = setTimeout(() => {
       const pendingShare = localStorage.getItem("pending_share_message");
       if (pendingShare && conversationId) {
         try {
           const data = JSON.parse(pendingShare);
-
-          // 调用发送函数
           handleUserSend(
-            "我刚刚完成了一次专注学习！", // 这里的文字用于回显
+            "我刚刚完成了一次专注学习！",
             "focus_share",
             undefined,
             undefined,
@@ -808,17 +823,15 @@ export default function ChatPage({ params }: PageProps) {
               taskName: data.taskName,
             }
           );
-
-          // 发送成功后清除
           localStorage.removeItem("pending_share_message");
           console.log("✅ 专注分享卡片已发送");
         } catch (e) {
           console.error("解析专注分享数据失败", e);
         }
       }
-    }, 300); // 👈 这里增加了 300ms 的延迟
+    }, 300);
 
-    return () => clearTimeout(timer); // 记得清理定时器
+    return () => clearTimeout(timer);
   }, [conversationId]);
 
   const getHeaderStatus = () => {
@@ -829,7 +842,7 @@ export default function ChatPage({ params }: PageProps) {
   const safeContactInfo = contactInfo || { name: "AI", avatar: "🐱" };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50 text-gray-900">
+    <div className="flex flex-col h-screen bg-gray-50 text-gray-900 relative">
       <header className="h-14 flex items-center justify-between px-4 border-b border-gray-200 bg-white/90 backdrop-blur-sm shrink-0 z-10 relative">
         <div className="flex items-center gap-2">
           <Link
@@ -910,9 +923,16 @@ export default function ChatPage({ params }: PageProps) {
         </div>
       )}
 
+      {/* 
+          🔥 滚动容器：绑定交互事件 🔥
+          onWheel, onTouchMove, onTouchStart -> 识别用户意图
+      */}
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
+        onWheel={handleUserInteraction} // 鼠标滚轮 -> 判定为交互
+        onTouchMove={handleUserInteraction} // 手指滑动 -> 判定为交互
+        onTouchStart={handleUserInteraction} // 手指按下 -> 立即判定为交互
         className="flex-1 overflow-y-auto px-1 pt-1 pb-7"
         style={{
           backgroundColor: bgImage ? "transparent" : "#f5f5f5",
@@ -941,6 +961,21 @@ export default function ChatPage({ params }: PageProps) {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* ✨ 悬浮按钮：回到底部 (当用户查看历史时显示) ✨ */}
+      {showScrollButton && !isSelectionMode && (
+        <div
+          className="absolute bottom-[80px] right-4 z-30 cursor-pointer animate-in fade-in slide-in-from-bottom-2 zoom-in-95 duration-200"
+          onClick={() => {
+            isUserInteracting.current = false; // 点击按钮，解除交互锁
+            scrollToBottom("smooth"); // 主动点击，可以使用平滑滚动
+          }}
+        >
+          <div className="bg-white text-[#07c160] shadow-md rounded-full p-2 border border-[#07c160]/20 flex items-center justify-center hover:bg-green-50 transition-colors active:scale-90">
+            <ChevronDown className="w-6 h-6" />
+          </div>
+        </div>
+      )}
+
       {!isSelectionMode ? (
         <InputArea
           input={input}
@@ -949,14 +984,9 @@ export default function ChatPage({ params }: PageProps) {
           onSendText={() => handleUserSend(input, "text")}
           onPanelChange={(isOpen) => {
             setIsPanelOpen(isOpen);
-            if (!isOpen) {
-              setTimeout(
-                () =>
-                  messagesEndRef.current?.scrollIntoView({
-                    behavior: "smooth",
-                  }),
-                300
-              );
+            // 面板打开时，如果原本在底部，则适应性滚动
+            if (isSticky.current) {
+              setTimeout(() => scrollToBottom("smooth"), 300);
             }
           }}
           onSendAudio={async (text, duration, audioBlob, imageDesc) => {
