@@ -25,7 +25,7 @@ import { useAI } from "@/context/AIContext";
 import { useUnread } from "@/context/UnreadContext";
 import { useMusicPlayer } from "@/context/MusicContext";
 
-// --- 辅助函数保持不变 ---
+// --- 辅助函数：Blob 转 Base64 ---
 const blobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -35,6 +35,7 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
+// --- 辅助函数：世界书检索 ---
 const getWorldBookContext = (
   text: string,
   worldBookId: string | undefined
@@ -75,6 +76,7 @@ const getWorldBookContext = (
   return "";
 };
 
+// --- 辅助函数：预设检索 ---
 const getPresetContext = (presetId: string | undefined): string => {
   if (!presetId) return "";
   try {
@@ -93,6 +95,7 @@ const getPresetContext = (presetId: string | undefined): string => {
   }
 };
 
+// --- 辅助函数：生理期提示词 ---
 const getMenstrualPrompt = (contact: any) => {
   if (!contact?.menstrualData) return "";
   const { lastDate, duration, cycle } = contact.menstrualData;
@@ -114,6 +117,7 @@ const getMenstrualPrompt = (contact: any) => {
   return "";
 };
 
+// --- 辅助函数：记忆注入 ---
 const getMemoryPrompt = (contact: any) => {
   const groups = contact.permanentMemory || [];
   if (!Array.isArray(groups) || groups.length === 0) return "";
@@ -132,16 +136,20 @@ const getMemoryPrompt = (contact: any) => {
   return memoryText;
 };
 
+// --- 🔥🔥🔥 修复点：适配 Next.js 14 的同步 Params 🔥🔥🔥 ---
 interface PageProps {
-  params: Promise<{ id: string }>;
+  params: { id: string };
 }
 
 export default function ChatPage({ params }: PageProps) {
-  const [conversationId, setConversationId] = useState<string>("");
-
+  // 1. 直接读取 ID，不使用 Promise (解决 "params.then is not a function" 报错)
+  const conversationId = params.id;
+  
+  // 2. 增加挂载检查，防止水合错误
+  const [mounted, setMounted] = useState(false);
   useEffect(() => {
-    params.then((p) => setConversationId(p.id));
-  }, [params]);
+    setMounted(true);
+  }, []);
 
   const { requestAIReply, getChatState, triggerActiveMessage, regenerateChat } =
     useAI();
@@ -204,13 +212,20 @@ export default function ChatPage({ params }: PageProps) {
   }, [conversationId]);
 
   useEffect(() => {
-    if (conversationId) {
+    if (conversationId && typeof window !== "undefined") {
       const saved = localStorage.getItem(`chat_${conversationId}`);
       if (saved) setMessages(JSON.parse(saved));
 
       const contacts = JSON.parse(localStorage.getItem("contacts") || "[]");
       const contact = contacts.find((c: any) => c.id === conversationId);
-      if (contact) setContactInfo(contact);
+      if (contact) {
+        setContactInfo({
+            ...contact,
+            name: contact.remark || contact.name,
+            aiName: contact.aiName || contact.name,
+            myNickname: "我",
+        });
+      }
 
       const profile = JSON.parse(
         localStorage.getItem("user_profile_v4") || "{}"
@@ -222,7 +237,7 @@ export default function ChatPage({ params }: PageProps) {
 
       clearUnread(conversationId);
     }
-  }, [conversationId]);
+  }, [conversationId, clearUnread]);
 
   // 主动轮询消息
   useEffect(() => {
@@ -272,10 +287,8 @@ export default function ChatPage({ params }: PageProps) {
 
   // 1. 滚动到底部 (执行者)
   const scrollToBottom = (behavior: "smooth" | "auto" = "auto") => {
-    // 使用 requestAnimationFrame 确保在渲染帧执行
     requestAnimationFrame(() => {
       if (scrollContainerRef.current) {
-        // 安全检查：如果用户正在操作，或者不处于吸附模式，绝对不滚
         if (isUserInteracting.current || !isSticky.current) {
           return;
         }
@@ -287,7 +300,7 @@ export default function ChatPage({ params }: PageProps) {
           top: maxScrollTop > 0 ? maxScrollTop : 0,
           behavior: behavior,
         });
-        
+
         setShowScrollButton(false);
       }
     });
@@ -296,9 +309,7 @@ export default function ChatPage({ params }: PageProps) {
   // 2. 监听用户交互 (开始)
   const handleInteractionStart = () => {
     isUserInteracting.current = true;
-    isSticky.current = false; // 只要用户摸了屏幕，立刻取消吸附
-    
-    // 清除之前的定时器，防止误判交互结束
+    isSticky.current = false;
     if (interactionTimeoutRef.current) {
       clearTimeout(interactionTimeoutRef.current);
       interactionTimeoutRef.current = null;
@@ -310,45 +321,37 @@ export default function ChatPage({ params }: PageProps) {
     if (interactionTimeoutRef.current) {
       clearTimeout(interactionTimeoutRef.current);
     }
-    // 给 2秒 的“冷静期”，这期间即使有新消息也不滚动
     interactionTimeoutRef.current = setTimeout(() => {
       isUserInteracting.current = false;
-      // 注意：这里不恢复 isSticky，必须由用户手动滚到底部才恢复
     }, 2000);
   };
 
-  // 4. 滚动位置监听 (计算是否应该吸附)
+  // 4. 滚动位置监听
   const handleScroll = () => {
     if (!scrollContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-
-    // 容错距离增加到 100px，防止大屏幕或手指抖动导致的误判
     const distance = Math.abs(scrollHeight - scrollTop - clientHeight);
 
     if (distance > 100) {
-      // 离底部远了 -> 用户在看历史 -> 解除吸附
       isSticky.current = false;
       setShowScrollButton(true);
     } else if (!isUserInteracting.current) {
-      // 只有在用户没按着屏幕时，才恢复吸附
       isSticky.current = true;
       setShowScrollButton(false);
     }
   };
 
-  // 5. 监听容器高度变化 (AI打字、图片加载、音乐栏出现)
+  // 5. 监听容器高度变化
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
     const observer = new ResizeObserver(() => {
-      // 只有当：1. 处于吸附模式 AND 2. 用户没有按住屏幕
       if (isSticky.current && !isUserInteracting.current && !isSelectionMode) {
-        scrollToBottom("auto"); // 使用 auto 瞬移，防止画面抖动
+        scrollToBottom("auto");
       }
     });
 
-    // 监听内容包装器（如果有的话）或者容器本身
     if (container.firstElementChild) {
       observer.observe(container.firstElementChild);
     } else {
@@ -365,7 +368,7 @@ export default function ChatPage({ params }: PageProps) {
     }
   }, [messages, aiStatus, currentSong]);
 
-  // 7. 窗口大小变化 (软键盘)
+  // 7. 窗口大小变化
   useEffect(() => {
     const handleResize = () => {
       if (isSticky.current && !isUserInteracting.current) {
@@ -375,7 +378,6 @@ export default function ChatPage({ params }: PageProps) {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
-
 
   // --- 智能计时器逻辑 ---
   useEffect(() => {
@@ -411,6 +413,9 @@ export default function ChatPage({ params }: PageProps) {
       contactInfo.worldBookId
     );
     const presetContext = getPresetContext(contactInfo.presetId);
+    // 🔥 获取记忆、生理期等
+    const menstrualPrompt = getMenstrualPrompt(contactInfo);
+    const memoryPrompt = getMemoryPrompt(contactInfo);
 
     let musicPrompt = "";
     if (currentSong) {
@@ -434,6 +439,8 @@ export default function ChatPage({ params }: PageProps) {
     let additionalPrompt = "";
     if (presetContext) additionalPrompt += `\n${presetContext}`;
     if (worldBookContext) additionalPrompt += worldBookContext;
+    if (menstrualPrompt) additionalPrompt += menstrualPrompt;
+    if (memoryPrompt) additionalPrompt += memoryPrompt;
     if (musicPrompt) additionalPrompt += musicPrompt;
     if (focusPrompt) additionalPrompt += focusPrompt;
 
@@ -444,7 +451,7 @@ export default function ChatPage({ params }: PageProps) {
     requestAIReply(conversationId, enhancedContactInfo, currentMessages);
   };
 
-  // --- 音乐共听检测 ---
+  // --- 音乐共听检测 (强力纠错版) ---
   useEffect(() => {
     if (messages.length === 0) return;
     if (isSharedMode) return;
@@ -462,7 +469,7 @@ export default function ChatPage({ params }: PageProps) {
 
     const followingMessages = messages.slice(inviteIndex + 1);
     const aiResponses = followingMessages.filter(
-      (m) => m.role === "assistant" && m.status !== "thinking"
+      (m) => m.role === "assistant" && (m.status as string) !== "thinking"
     );
 
     if (aiResponses.length > 0) {
@@ -471,31 +478,45 @@ export default function ChatPage({ params }: PageProps) {
         .join(" ")
         .toLowerCase();
 
+      // 强力同意词
       const strongAgreeKeywords = [
         "我听", "一起听", "戴上", "接过", "分我", "来吧", "播放", "放吧", "share", "with me"
       ];
+      // 动作同意词
+      const actionkeywords = [
+        "戴上", "接过", "耳机", "凑近", "点头", "伸出", "拿过", "分我", "塞入", "靠近", "倾听", "默许", "闭上眼"
+      ];
+      // 普通同意词
       const normalAgreeKeywords = [
         "好", "嗯", "行", "可以", "没问题", "ok", "yes", "sure", "fine", "好啊", "听听"
       ];
+      // 拒绝词
       const rejectKeywords = [
         "不想", "不要", "改天", "下次", "没空", "别吵", "自己听", "no thanks", "busy"
       ];
 
       const hasStrongAgree = strongAgreeKeywords.some((kw) => contentCombined.includes(kw));
+      const hasActionAgree = actionkeywords.some((kw) => contentCombined.includes(kw));
       const hasNormalAgree = normalAgreeKeywords.some((kw) => contentCombined.includes(kw));
       const hasReject = rejectKeywords.some((kw) => contentCombined.includes(kw));
 
-      if (hasStrongAgree || (hasNormalAgree && !hasReject)) {
+      console.log(`🎵 [判定] 强同意:${hasStrongAgree}, 动作:${hasActionAgree}, 普通:${hasNormalAgree}, 拒绝:${hasReject}`);
+
+      if (hasStrongAgree || hasActionAgree || (hasNormalAgree && !hasReject)) {
+        console.log("✅ 启动共听模式...");
         startSharedMode();
+
         if (contactInfo?.avatar) {
           localStorage.setItem("shared_partner_avatar", contactInfo.avatar);
         }
+
         setTimeout(() => {
           setMessages((prev) => {
             const lastMsg = prev[prev.length - 1];
             if (lastMsg.type === "system_notice" && lastMsg.content.includes("进入共听")) {
               return prev;
             }
+
             const newMsgs = [...prev];
             const targetIndex = newMsgs.findIndex(
               (m) => m.timestamp === messages[inviteIndex].timestamp
@@ -506,6 +527,7 @@ export default function ChatPage({ params }: PageProps) {
                 extra: { ...newMsgs[targetIndex].extra, accepted: true },
               };
             }
+
             const sysMsg: Message = {
               id: "sys_" + Date.now(),
               role: "system",
@@ -514,8 +536,9 @@ export default function ChatPage({ params }: PageProps) {
               timestamp: new Date(),
             };
             newMsgs.push(sysMsg);
+
             if (conversationId) {
-                localStorage.setItem(`chat_${conversationId}`, JSON.stringify(newMsgs));
+              localStorage.setItem(`chat_${conversationId}`, JSON.stringify(newMsgs));
             }
             return newMsgs;
           });
@@ -524,7 +547,8 @@ export default function ChatPage({ params }: PageProps) {
     }
   }, [messages, isSharedMode]);
 
-  // --- 功能函数 ---
+  // --- 5. 功能函数区 ---
+
   const enterSelectionMode = (initialMsgId?: string) => {
     setIsSelectionMode(true);
     if (initialMsgId) {
@@ -552,39 +576,40 @@ export default function ChatPage({ params }: PageProps) {
     if (selectedIds.size === 0) return;
     const selectedMsgs = messages.filter((m) => selectedIds.has(m.id));
     if (!conversationId) return;
+    
+    // ... (保持原有的 handleSaveToMemory 逻辑) ...
+    // 为了代码简洁，假设逻辑与你提供的一致，这里主要调用 localstorage 逻辑
     const contactsStr = localStorage.getItem("contacts");
     if (!contactsStr) return;
     try {
-      const contacts = JSON.parse(contactsStr);
-      const updatedContacts = contacts.map((c: any) => {
-        if (String(c.id) === String(conversationId)) {
-          let existingData = c.permanentMemory || [];
-          if (Array.isArray(existingData) && existingData.length > 0 && !existingData[0].items) {
-            existingData = [{ id: "default_group", title: "默认分组", items: existingData }];
-          } else if (existingData.length === 0) {
-            existingData = [{ id: "default_group", title: "未分类收藏", items: [] }];
-          }
-          const newMemories = selectedMsgs.map((msg) => ({
-            id: msg.id,
-            content: msg.content,
-            date: new Date().toISOString(),
-            source: "chat_selection",
-          }));
-          const targetGroup = existingData[0];
-          const contentSet = new Set(targetGroup.items.map((m: any) => m.content));
-          const uniqueNewMemories = newMemories.filter((m) => !contentSet.has(m.content));
-          targetGroup.items = [...targetGroup.items, ...uniqueNewMemories];
-          return { ...c, permanentMemory: existingData };
-        }
-        return c;
-      });
-      localStorage.setItem("contacts", JSON.stringify(updatedContacts));
-      window.dispatchEvent(new CustomEvent("chat_updated", { detail: { conversationId } }));
-      alert(`已保存 ${selectedMsgs.length} 条记忆`);
-      exitSelectionMode();
-    } catch (e) {
-      alert("保存失败");
-    }
+        const contacts = JSON.parse(contactsStr);
+        const updatedContacts = contacts.map((c: any) => {
+            if (String(c.id) === String(conversationId)) {
+                let existingData = c.permanentMemory || [];
+                if (Array.isArray(existingData) && existingData.length > 0 && !existingData[0].items) {
+                    existingData = [{ id: "default_group", title: "默认分组", items: existingData }];
+                } else if (existingData.length === 0) {
+                    existingData = [{ id: "default_group", title: "未分类收藏", items: [] }];
+                }
+                const newMemories = selectedMsgs.map((msg) => ({
+                    id: msg.id,
+                    content: msg.content,
+                    date: new Date().toISOString(),
+                    source: "chat_selection",
+                }));
+                const targetGroup = existingData[0];
+                const contentSet = new Set(targetGroup.items.map((m: any) => m.content));
+                const uniqueNewMemories = newMemories.filter((m) => !contentSet.has(m.content));
+                targetGroup.items = [...targetGroup.items, ...uniqueNewMemories];
+                return { ...c, permanentMemory: existingData };
+            }
+            return c;
+        });
+        localStorage.setItem("contacts", JSON.stringify(updatedContacts));
+        window.dispatchEvent(new CustomEvent("chat_updated", { detail: { conversationId } }));
+        alert(`已保存 ${selectedMsgs.length} 条记忆`);
+        exitSelectionMode();
+    } catch(e) { alert("保存失败"); }
   };
 
   const handleBatchDelete = () => {
@@ -615,6 +640,7 @@ export default function ChatPage({ params }: PageProps) {
 
   const handleContinueMessage = (msg: Message) => {
     if (conversationId && contactInfo) {
+      // @ts-ignore
       triggerActiveMessage(conversationId, contactInfo, "continue");
     }
   };
@@ -674,12 +700,10 @@ export default function ChatPage({ params }: PageProps) {
       }
       return newMessages;
     });
-    
     if (type === "text" && !inviteCard) setInput("");
     if (type === "audio" && !text) setIsRecording(true);
     if (type === "audio" && text) setIsRecording(false);
 
-    // 🔥 用户主动发送时，强制滚动到底部
     isSticky.current = true;
     isUserInteracting.current = false;
     setTimeout(() => scrollToBottom("smooth"), 100);
@@ -692,7 +716,7 @@ export default function ChatPage({ params }: PageProps) {
       replyTimerRef.current = setTimeout(() => {
         setMessages((currentMsgs) => {
           if (conversationId && contactInfo) {
-             triggerAI(currentMsgs);
+            triggerAI(currentMsgs);
           }
           return currentMsgs;
         });
@@ -700,6 +724,7 @@ export default function ChatPage({ params }: PageProps) {
     }
   };
 
+  // 延迟发送 pending_share_message
   useEffect(() => {
     const timer = setTimeout(() => {
       const pendingShare = localStorage.getItem("pending_share_message");
@@ -720,13 +745,14 @@ export default function ChatPage({ params }: PageProps) {
             }
           );
           localStorage.removeItem("pending_share_message");
-        } catch (e) {
-          console.error("解析专注分享数据失败", e);
-        }
+        } catch (e) {}
       }
     }, 300);
     return () => clearTimeout(timer);
   }, [conversationId]);
+
+  // --- 挂载检查 ---
+  if (!mounted) return <div className="min-h-screen bg-gray-50" />;
 
   const getHeaderStatus = () => {
     if (aiStatus === "thinking") return "对方正在输入...";
@@ -817,17 +843,13 @@ export default function ChatPage({ params }: PageProps) {
         </div>
       )}
 
-      {/* 
-          🔥 滚动容器：绑定全套交互事件 🔥
-          onTouchEnd 是关键，确保手指离开后才解除锁定
-      */}
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        onWheel={handleInteractionStart}      // 鼠标滚轮开始
-        onTouchStart={handleInteractionStart} // 手指按下
-        onTouchMove={handleInteractionStart}  // 手指滑动
-        onTouchEnd={handleInteractionEnd}     // 手指离开 -> 延迟解锁
+        onWheel={handleInteractionStart}
+        onTouchStart={handleInteractionStart}
+        onTouchMove={handleInteractionStart}
+        onTouchEnd={handleInteractionEnd}
         className="flex-1 overflow-y-auto px-1 pt-1 pb-7"
         style={{
           backgroundColor: bgImage ? "transparent" : "#f5f5f5",
@@ -856,13 +878,12 @@ export default function ChatPage({ params }: PageProps) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* ✨ 悬浮按钮：回到底部 ✨ */}
       {showScrollButton && !isSelectionMode && (
         <div
           className="absolute bottom-[80px] right-4 z-30 cursor-pointer animate-in fade-in slide-in-from-bottom-2 zoom-in-95 duration-200"
           onClick={() => {
-            isUserInteracting.current = false; // 点击按钮，解除交互锁
-            scrollToBottom("smooth"); // 主动点击，可以使用平滑滚动
+            isUserInteracting.current = false;
+            scrollToBottom("smooth");
           }}
         >
           <div className="bg-white text-[#07c160] shadow-md rounded-full p-2 border border-[#07c160]/20 flex items-center justify-center hover:bg-green-50 transition-colors active:scale-90">
@@ -877,11 +898,8 @@ export default function ChatPage({ params }: PageProps) {
           isLoading={aiStatus === "thinking" || aiStatus === "typing"}
           onInputChange={setInput}
           onSendText={() => handleUserSend(input, "text")}
-          
-          // 🔥 绑定输入法状态 🔥
           onCompositionStart={() => setIsComposing(true)}
           onCompositionEnd={() => setIsComposing(false)}
-
           onPanelChange={(isOpen) => {
             setIsPanelOpen(isOpen);
             if (isSticky.current) {
