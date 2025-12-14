@@ -16,6 +16,8 @@ import {
   Share2,
   X,
   User,
+  Clock, // ✨ 新增图标
+  Repeat, // ✨ 新增图标
 } from "lucide-react";
 
 // --- 类型定义 ---
@@ -29,6 +31,10 @@ interface Task {
   done: boolean;
   type: TaskType;
   completedAt?: number;
+  // ✨ 新增字段：时间范围和重复
+  startTime?: string;
+  endTime?: string;
+  isDaily?: boolean;
 }
 
 interface Contact {
@@ -94,7 +100,6 @@ const TYPE_CONFIG = {
   },
 };
 
-// 核心修改：提取依赖 useSearchParams 的逻辑到子组件
 const FocusContent = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -126,13 +131,17 @@ const FocusContent = () => {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [newTaskText, setNewTaskText] = useState("");
   const [newTaskType, setNewTaskType] = useState<TaskType>("u-i");
+  // ✨ 新增任务状态：时间范围和重复
+  const [newTaskStartTime, setNewTaskStartTime] = useState("");
+  const [newTaskEndTime, setNewTaskEndTime] = useState("");
+  const [newTaskIsDaily, setNewTaskIsDaily] = useState(false);
+
   const [showSettingModal, setShowSettingModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
 
   // 提取已完成任务
   const finishedTasks = tasks.filter((t) => t.done);
-  const unfinishedTasks = tasks.filter((t) => !t.done);
   const tasksByType = {
     "u-i": tasks.filter((t) => t.type === "u-i" && !t.done),
     "nu-i": tasks.filter((t) => t.type === "nu-i" && !t.done),
@@ -150,7 +159,24 @@ const FocusContent = () => {
   // --- 加载与保存 ---
   useEffect(() => {
     const loadedTasks = localStorage.getItem(STORAGE_KEY_TASKS);
-    if (loadedTasks) setTasks(JSON.parse(loadedTasks));
+    if (loadedTasks) {
+      let parsedTasks: Task[] = JSON.parse(loadedTasks);
+
+      // ✨ 核心逻辑：每日任务重置
+      // 如果任务是每日重复(isDaily)，且已完成(done)，但完成日期不是今天，则重置为未完成
+      const todayStr = new Date().toDateString();
+      parsedTasks = parsedTasks.map((t) => {
+        if (t.isDaily && t.done && t.completedAt) {
+          const taskDate = new Date(t.completedAt).toDateString();
+          if (taskDate !== todayStr) {
+            return { ...t, done: false, completedAt: undefined };
+          }
+        }
+        return t;
+      });
+
+      setTasks(parsedTasks);
+    }
 
     const loadedTotal = localStorage.getItem(STORAGE_KEY_TOTAL);
     if (loadedTotal) setTotalSeconds(Number(loadedTotal));
@@ -191,7 +217,7 @@ const FocusContent = () => {
     localStorage.setItem(STORAGE_KEY_TOTAL, String(totalSeconds));
   }, [totalSeconds]);
 
-  // 处理 URL 自动开始参数（依赖 searchParams，核心逻辑）
+  // 处理 URL 自动开始参数
   useEffect(() => {
     const auto = searchParams.get("auto");
     if (auto === "1") {
@@ -205,11 +231,11 @@ const FocusContent = () => {
       setCycles(pCycles);
 
       if (pTask && !tasks.some((t) => t.text === pTask)) {
-        const newTask = {
+        const newTask: Task = {
           id: Date.now().toString(),
           text: decodeURIComponent(pTask),
           done: false,
-          type: "u-i" as TaskType,
+          type: "u-i",
         };
         setTasks((prev) => [...prev, newTask]);
       }
@@ -318,9 +344,17 @@ const FocusContent = () => {
       text: newTaskText,
       done: false,
       type: newTaskType,
+      // ✨ 保存新字段
+      startTime: newTaskStartTime,
+      endTime: newTaskEndTime,
+      isDaily: newTaskIsDaily,
     };
     setTasks([...tasks, newTask]);
+    // 重置所有输入状态
     setNewTaskText("");
+    setNewTaskStartTime("");
+    setNewTaskEndTime("");
+    setNewTaskIsDaily(false);
     setShowTaskModal(false);
   };
 
@@ -344,7 +378,7 @@ const FocusContent = () => {
     setTasks(tasks.filter((t) => t.id !== id));
   };
 
-  // 页面渲染逻辑（原 FocusPage 的 return 内容）
+  // 页面渲染逻辑
   return (
     <div className="min-h-screen bg-[#FDFCF8] text-slate-700 pb-28 relative overflow-hidden font-sans selection:bg-rose-200">
       {/* 🌈 背景光晕 */}
@@ -518,17 +552,35 @@ const FocusContent = () => {
                         typeTasks.map((task) => (
                           <div
                             key={task.id}
-                            className="group flex items-center gap-3 p-3 hover:bg-slate-50 rounded-xl transition-colors"
+                            className="group flex items-start gap-3 p-3 hover:bg-slate-50 rounded-xl transition-colors"
                           >
                             <button
                               onClick={() => toggleTask(task.id)}
-                              className={`w-5 h-5 rounded-md border-[2px] flex items-center justify-center transition-colors ${config.border} hover:bg-slate-100`}
+                              className={`mt-0.5 w-5 h-5 rounded-md border-[2px] flex items-center justify-center transition-colors shrink-0 ${config.border} hover:bg-slate-100`}
                             >
                               <div className="w-0 h-0" />
                             </button>
-                            <span className="flex-1 text-sm text-slate-600 font-medium truncate">
-                              {task.text}
-                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm text-slate-600 font-medium truncate">
+                                  {task.text}
+                                </span>
+                                {/* ✨ 显示每日重复图标 */}
+                                {task.isDaily && (
+                                  <Repeat className="w-3 h-3 text-rose-400 shrink-0" />
+                                )}
+                              </div>
+                              {/* ✨ 显示时间范围 */}
+                              {(task.startTime || task.endTime) && (
+                                <div className="flex items-center gap-1 mt-1 text-[10px] font-bold text-slate-400 bg-slate-100/50 inline-flex px-1.5 py-0.5 rounded-md">
+                                  <Clock className="w-3 h-3" />
+                                  <span>
+                                    {task.startTime || "..."} -{" "}
+                                    {task.endTime || "..."}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
                             <button
                               onClick={() => deleteTask(task.id)}
                               className="text-slate-200 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
@@ -557,12 +609,19 @@ const FocusContent = () => {
                     {finishedTasks.map((task) => (
                       <div
                         key={task.id}
-                        className="bg-slate-100 rounded-xl p-3 flex items-center gap-3"
+                        className="bg-slate-100 rounded-xl p-3 flex items-start gap-3"
                       >
-                        <Check className="w-4 h-4 text-slate-400" />
-                        <span className="text-slate-400 line-through text-xs flex-1 truncate">
-                          {task.text}
-                        </span>
+                        <Check className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-400 line-through text-xs truncate">
+                              {task.text}
+                            </span>
+                            {task.isDaily && (
+                              <Repeat className="w-3 h-3 text-slate-300 shrink-0" />
+                            )}
+                          </div>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -694,13 +753,65 @@ const FocusContent = () => {
                 </svg>
               </button>
             </div>
+
             <input
-              className="w-full bg-slate-50 text-slate-700 font-bold text-lg rounded-2xl px-4 py-4 mb-6 outline-none border-2 border-transparent focus:border-rose-200 focus:bg-white transition-all placeholder:text-slate-300"
+              className="w-full bg-slate-50 text-slate-700 font-bold text-lg rounded-2xl px-4 py-4 mb-4 outline-none border-2 border-transparent focus:border-rose-200 focus:bg-white transition-all placeholder:text-slate-300"
               placeholder="写下要做的事..."
               autoFocus
               value={newTaskText}
               onChange={(e) => setNewTaskText(e.target.value)}
             />
+
+            {/* ✨ 新增：时间和重复设置区域 */}
+            <div className="bg-slate-50 rounded-2xl p-4 mb-6 space-y-4">
+              {/* 时间范围 */}
+              <div className="flex items-center gap-3">
+                <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+                <div className="flex items-center gap-2 flex-1">
+                  <input
+                    type="time"
+                    value={newTaskStartTime}
+                    onChange={(e) => setNewTaskStartTime(e.target.value)}
+                    className="bg-white rounded-lg px-2 py-1 text-sm font-bold text-slate-600 outline-none border border-transparent focus:border-rose-200 w-full"
+                  />
+                  <span className="text-slate-300">-</span>
+                  <input
+                    type="time"
+                    value={newTaskEndTime}
+                    onChange={(e) => setNewTaskEndTime(e.target.value)}
+                    className="bg-white rounded-lg px-2 py-1 text-sm font-bold text-slate-600 outline-none border border-transparent focus:border-rose-200 w-full"
+                  />
+                </div>
+              </div>
+
+              {/* 重复设置 */}
+              <div className="flex items-center gap-3">
+                <Repeat className="w-4 h-4 text-slate-400 shrink-0" />
+                <div className="flex bg-white rounded-lg p-1 w-full">
+                  <button
+                    onClick={() => setNewTaskIsDaily(false)}
+                    className={`flex-1 text-xs font-bold py-1.5 rounded-md transition-all ${
+                      !newTaskIsDaily
+                        ? "bg-slate-800 text-white shadow-sm"
+                        : "text-slate-400 hover:bg-slate-50"
+                    }`}
+                  >
+                    一次性
+                  </button>
+                  <button
+                    onClick={() => setNewTaskIsDaily(true)}
+                    className={`flex-1 text-xs font-bold py-1.5 rounded-md transition-all ${
+                      newTaskIsDaily
+                        ? "bg-rose-400 text-white shadow-sm"
+                        : "text-slate-400 hover:bg-slate-50"
+                    }`}
+                  >
+                    每天重复
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 gap-2 mb-6">
               {Object.entries(TYPE_CONFIG).map(([key, config]) => (
                 <button
@@ -889,7 +1000,7 @@ const FocusContent = () => {
   );
 };
 
-// 主页面组件：用 Suspense 包裹依赖 useSearchParams 的 FocusContent
+// 主页面组件
 export default function FocusPage() {
   return (
     <Suspense

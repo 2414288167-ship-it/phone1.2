@@ -230,7 +230,7 @@ export default function ChatSettingsPage({ params }: PageProps) {
   const [voiceId, setVoiceId] = useState("minimax_voice_id");
   const [voiceLang, setVoiceLang] = useState("auto");
   const [asideMode, setAsideMode] = useState(false);
-  const [todoSync, setTodoSync] = useState(false);
+  const [todoSync, setTodoSync] = useState(false); // ✨ 待办事项同步
   const [descMode, setDescMode] = useState(false);
   const [timeSense, setTimeSense] = useState(true);
   const [timezone, setTimezone] = useState("Asia/Shanghai");
@@ -348,7 +348,7 @@ export default function ChatSettingsPage({ params }: PageProps) {
               setAsideMode(contact.asideMode);
             if (contact.absoluteOnlineMode !== undefined)
               setAbsoluteOnlineMode(contact.absoluteOnlineMode);
-            if (contact.todoSync !== undefined) setTodoSync(contact.todoSync);
+            if (contact.syncTasks !== undefined) setTodoSync(contact.syncTasks); // ✨ 加载同步设置
             if (contact.descMode !== undefined) setDescMode(contact.descMode);
             if (contact.timeSense !== undefined)
               setTimeSense(contact.timeSense);
@@ -437,7 +437,7 @@ export default function ChatSettingsPage({ params }: PageProps) {
               voiceId,
               voiceLang,
               asideMode,
-              todoSync,
+              syncTasks: todoSync, // ✨ 保存同步设置
               descMode,
               timeSense,
               timezone,
@@ -451,11 +451,10 @@ export default function ChatSettingsPage({ params }: PageProps) {
         });
         localStorage.setItem("contacts", JSON.stringify(updatedContacts));
 
-        // 🔥🔥🔥 核心修复：保存时强制清除旧的计时器，让新的设置（如1分钟）立即生效
         localStorage.removeItem(`ai_target_time_${id}`);
         console.log(`[设置] 已重置角色 ${id} 的后台计时器`);
 
-        alert("设置已保存！计时器已重置，请观察控制台日志。");
+        alert("设置已保存！");
         router.back();
       }
     }
@@ -539,7 +538,6 @@ export default function ChatSettingsPage({ params }: PageProps) {
 
         {/* 角色设定与世界书 */}
         <Section title="角色设定 (World Book Setting)">
-          {/* 1. 关联世界书 */}
           <InputItem
             label="关联世界书"
             type="select"
@@ -550,7 +548,6 @@ export default function ChatSettingsPage({ params }: PageProps) {
 
           <div className="border-t border-gray-100 my-2"></div>
 
-          {/* 2. 对方人设 */}
           <div className="py-3">
             <div className="text-base text-gray-900 mb-2 font-medium">
               对方人设 (AI Persona)
@@ -565,7 +562,6 @@ export default function ChatSettingsPage({ params }: PageProps) {
 
           <div className="border-t border-gray-100 my-2"></div>
 
-          {/* 3. 我的设定 */}
           <InputItem
             label="我的设定 (User Persona)"
             type="select"
@@ -699,6 +695,14 @@ export default function ChatSettingsPage({ params }: PageProps) {
 
         {/* ... 其他 Sections ... */}
         <Section>
+          {/* ✨✨✨ 新增：待办事项同步 ✨✨✨ */}
+          <SwitchItem
+            label="同步待办事项"
+            desc="允许 AI 读取清单并监督学习"
+            value={todoSync}
+            onChange={setTodoSync}
+          />
+
           <SwitchItem
             label="启用实时天气同步"
             value={weatherSync}
@@ -740,30 +744,28 @@ export default function ChatSettingsPage({ params }: PageProps) {
             value={asideMode}
             onChange={setAsideMode}
           />
-          {/* ✨ 绝对线上模式开关 (修改 onChange 逻辑) ✨ */}
+          {/* ✨ 绝对线上模式开关 */}
           <SwitchItem
             label="绝对线上模式"
             desc="强制保持网聊风格，禁止任何动作描写和括号"
             value={absoluteOnlineMode}
             onChange={(val: boolean) => {
               setAbsoluteOnlineMode(val);
-              // 互斥逻辑：如果开启了线上模式，强制关闭线下模式
               if (val) {
                 setDescMode(false);
               }
             }}
           />
-          {/* ✨ 线下模式 (扩展版) ✨ */}
+          {/* ✨ 线下模式 */}
           <SwitchItem
             label="线下模式 (物理接触)"
             value={descMode}
             onChange={(val: boolean) => {
               setDescMode(val);
-              if (val) setAbsoluteOnlineMode(false); // 互斥
+              if (val) setAbsoluteOnlineMode(false);
             }}
           />
 
-          {/* 只有开启线下模式时，才显示子选项 */}
           {descMode && (
             <div className="bg-gray-50 rounded-lg p-3 mt-[-10px] mb-4 mx-4 border border-gray-100 animate-in slide-in-from-top-2">
               <div className="text-xs text-gray-500 mb-2 font-medium">

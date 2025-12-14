@@ -1,5 +1,3 @@
-// --- START OF FILE app/chat/[id]/info/page.tsx ---
-
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
@@ -14,7 +12,8 @@ import {
   Volume2,
   Search,
   Image as ImageIcon,
-  Brain, // 新增图标
+  Brain,
+  ListTodo, // ✨ 新增图标
 } from "lucide-react";
 import { useUnread } from "@/context/UnreadContext";
 
@@ -43,6 +42,7 @@ export default function ChatInfoPage({ params }: PageProps) {
   const [dndEnabled, setDndEnabled] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
   const [alertEnabled, setAlertEnabled] = useState(true);
+  const [syncTasks, setSyncTasks] = useState(false); // ✨ 新增：待办同步开关
 
   // --- 背景图状态 ---
   const [hasBg, setHasBg] = useState(false);
@@ -78,6 +78,7 @@ export default function ChatInfoPage({ params }: PageProps) {
             setDndEnabled(current.dndEnabled || false);
             setIsPinned(current.isPinned || false);
             setAlertEnabled(current.alertEnabled !== false); // 默认为 true
+            setSyncTasks(current.syncTasks || false); // ✨ 加载同步设置
           }
         }
         // 检查是否有背景图
@@ -180,10 +181,17 @@ export default function ChatInfoPage({ params }: PageProps) {
     >
       <div className="flex items-center gap-3">
         {icon && <div className="text-gray-500">{icon}</div>}
-        <span className="text-base text-gray-900">{label}</span>
+        <div className="flex flex-col">
+          <span className="text-base text-gray-900">{label}</span>
+          {subText && type === "toggle" && (
+            <span className="text-xs text-gray-400 mt-0.5">{subText}</span>
+          )}
+        </div>
       </div>
       <div className="flex items-center gap-2">
-        {subText && <span className="text-sm text-gray-400">{subText}</span>}
+        {subText && type !== "toggle" && (
+          <span className="text-sm text-gray-400">{subText}</span>
+        )}
         {type === "arrow" && <ChevronRight className="w-5 h-5 text-gray-300" />}
         {type === "toggle" && (
           <div
@@ -366,7 +374,6 @@ export default function ChatInfoPage({ params }: PageProps) {
         {/* 菜单组 1: 搜索与记忆 */}
         <div className="mb-2">
           <MenuItem label="查找聊天记录" onClick={() => setIsSearching(true)} />
-          {/* ✅ 核心添加：记忆管理 */}
           <MenuItem
             label="记忆管理"
             icon={<Brain className="w-5 h-5" />}
@@ -374,8 +381,29 @@ export default function ChatInfoPage({ params }: PageProps) {
           />
         </div>
 
+        {/* 菜单组 4: 更多设置路由跳转 */}
+        <div className="mb-8">
+          <MenuItem
+            label="聊天设置"
+            onClick={() => router.push(`/chat/${id}/settings`)}
+          />
+        </div>
+
         {/* 菜单组 2: 开关 */}
         <div className="mb-2">
+          {/* ✨✨✨ 待办事项同步开关 ✨✨✨ */}
+          <MenuItem
+            label="同步待办事项"
+            subText="允许 AI 读取清单并监督学习"
+            icon={<ListTodo className="w-5 h-5 text-gray-500" />}
+            type="toggle"
+            value={syncTasks}
+            onClick={() => {
+              setSyncTasks(!syncTasks);
+              updateContact("syncTasks", !syncTasks);
+            }}
+          />
+
           <MenuItem
             label="消息免打扰"
             type="toggle"
@@ -432,14 +460,6 @@ export default function ChatInfoPage({ params }: PageProps) {
               onClick={handleRestoreBackground}
             />
           )}
-        </div>
-
-        {/* 菜单组 4: 更多设置路由跳转 */}
-        <div className="mb-8">
-          <MenuItem
-            label="聊天设置"
-            onClick={() => router.push(`/chat/${id}/settings`)}
-          />
         </div>
 
         {/* 菜单组 5: 清空 */}

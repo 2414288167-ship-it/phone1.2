@@ -18,6 +18,10 @@ import {
   PlayCircle,
   Music,
   CheckCircle2,
+  CalendarClock,
+  Circle,
+  ListTodo,
+  PlusCircle, // ✨ 确保只在这里出现一次
 } from "lucide-react";
 import Link from "next/link";
 
@@ -122,7 +126,154 @@ const FocusCard = ({
   );
 };
 
-// --- 🔥🔥🔥 关键修复：添加 export 关键字 🔥🔥🔥 ---
+// --- StudyPlanCard (学习计划卡片) ---
+const StudyPlanCard = ({ content }: { content: string }) => {
+  // 解析 Markdown 格式的任务列表
+  const lines = content
+    .split("\n")
+    .filter((line) => line.trim().startsWith("- ["));
+
+  // 处理导入逻辑
+  const handleImport = () => {
+    try {
+      const existingStr = localStorage.getItem("my_focus_tasks");
+      const existingTasks = existingStr ? JSON.parse(existingStr) : [];
+
+      const newTasks = lines.map((line) => {
+        const isDone = line.includes("[x]") || line.includes("[X]");
+        // 1. 移除 "- [ ] " 前缀
+        let rawText = line.replace(/^-\s*\[.?\]\s*/, "").trim();
+
+        // 2. ✨✨✨ 核心升级：正则提取时间段 (HH:MM-HH:MM) ✨✨✨
+        // 匹配示例: "14:00-15:00", "14:00 - 15:00", "14:00"
+        const timeRegex = /^(\d{1,2}:\d{2})(?:\s*[-~to]\s*(\d{1,2}:\d{2}))?/;
+        const match = rawText.match(timeRegex);
+
+        let startTime = "";
+        let endTime = "";
+        let taskText = rawText;
+
+        if (match) {
+          startTime = match[1]; // 第一个时间点 (如 14:00)
+          endTime = match[2] || ""; // 第二个时间点 (如 15:00)，可能为空
+
+          // 从任务文本中移除时间部分，只保留描述
+          // match[0] 是整个匹配到的时间字符串
+          taskText = rawText.replace(match[0], "").trim();
+        }
+
+        // 3. 构建 Task 对象
+        return {
+          id: Date.now().toString() + Math.random().toString().slice(2, 5),
+          text: taskText || "AI 建议任务",
+          done: isDone,
+          type: "u-i", // 默认为"重要紧急"
+          startTime: startTime,
+          endTime: endTime,
+          isDaily: false,
+        };
+      });
+
+      const finalTasks = [...existingTasks, ...newTasks];
+      localStorage.setItem("my_focus_tasks", JSON.stringify(finalTasks));
+      window.dispatchEvent(new Event("local-storage-update"));
+
+      alert(`已成功导入 ${newTasks.length} 个任务！`);
+    } catch (e) {
+      console.error("导入失败", e);
+      alert("导入失败，请重试");
+    }
+  };
+
+  return (
+    <div className="bg-white p-4 rounded-2xl shadow-sm border border-rose-100 w-64">
+      <div className="flex items-center justify-between gap-2 mb-3 border-b border-gray-50 pb-2">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 bg-rose-50 rounded-full flex items-center justify-center text-rose-500">
+            <ListTodo className="w-5 h-5" />
+          </div>
+          <span className="font-bold text-gray-800 text-sm">计划详情</span>
+        </div>
+
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            handleImport();
+          }}
+          className="flex items-center gap-1 text-[10px] bg-rose-50 text-rose-500 px-2 py-1 rounded-full hover:bg-rose-100 transition-colors active:scale-95"
+        >
+          <PlusCircle className="w-3 h-3" />
+          导入清单
+        </button>
+      </div>
+
+      <div className="space-y-2.5">
+        {lines.length === 0 ? (
+          <div className="text-xs text-gray-400 italic">暂无计划内容...</div>
+        ) : (
+          lines.map((line, i) => {
+            const isDone = line.includes("[x]") || line.includes("[X]");
+            let rawText = line.replace(/^-\s*\[.?\]\s*/, "").trim();
+
+            // 渲染时也提取一下时间，为了展示美观
+            const timeRegex =
+              /^(\d{1,2}:\d{2})(?:\s*[-~to]\s*(\d{1,2}:\d{2}))?/;
+            const match = rawText.match(timeRegex);
+            let timeDisplay = "";
+            let textDisplay = rawText;
+
+            if (match) {
+              timeDisplay = match[0]; // "14:00-15:00"
+              textDisplay = rawText.replace(match[0], "").trim();
+            }
+
+            return (
+              <div
+                key={i}
+                className={`flex items-start gap-2 text-xs ${
+                  isDone ? "opacity-50" : ""
+                }`}
+              >
+                <div
+                  className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0
+                  ${
+                    isDone
+                      ? "bg-rose-100 border-rose-200 text-rose-500"
+                      : "border-gray-300 bg-white"
+                  }`}
+                >
+                  {isDone && <Check className="w-3 h-3" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div
+                    className={`font-medium truncate ${
+                      isDone ? "line-through text-gray-400" : "text-gray-700"
+                    }`}
+                  >
+                    {textDisplay || "未命名任务"}
+                  </div>
+                  {timeDisplay && (
+                    <div className="flex items-center gap-1 text-[10px] text-gray-400 mt-0.5 bg-gray-50 w-fit px-1 rounded">
+                      <CalendarClock className="w-3 h-3" />
+                      {timeDisplay}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <div className="mt-3 pt-2 border-t border-gray-50 flex justify-between items-center text-[10px] text-gray-400">
+        <span>按时完成哦 💪</span>
+        <span className="text-rose-300">AI 助理</span>
+      </div>
+    </div>
+  );
+};
+
+// --- 消息类型定义 ---
 export interface Message {
   id: string;
   role: string;
@@ -136,7 +287,8 @@ export interface Message {
     | "music_invite"
     | "system_notice"
     | "focus_invite"
-    | "focus_share";
+    | "focus_share"
+    | "study_card";
   duration?: number;
   audioUrl?: string;
   status?: "sending" | "sent" | "error";
@@ -153,7 +305,7 @@ export interface Message {
   };
 }
 
-// --- 🔥🔥🔥 关键修复：添加多选相关的 Props 定义 🔥🔥🔥 ---
+// --- 多选相关的 Props 定义 ---
 interface MessageListProps {
   messages: Message[];
   isLoading: boolean;
@@ -212,13 +364,11 @@ const RenderContentWithImages = ({ content }: { content: string }) => {
 
 // 分割逻辑：将文本拆分为 [旁白, 对话, 旁白...]
 const splitNarrativeContent = (text: string) => {
-  // 匹配所有括号内容（全角/半角）
   const regex = /([（\(][\s\S]*?[）\)])/g;
   const parts = text.split(regex).filter((p) => p.trim() !== "");
 
   return parts.map((part) => {
     const trimmed = part.trim();
-    // 判断是否是旁白
     const isNarration = /^([（\(])/.test(trimmed) && /([）\)])$/.test(trimmed);
     return {
       text: part,
@@ -337,7 +487,6 @@ export default function MessageList({
   return (
     <div className="flex flex-col gap-3 py-4" ref={scrollRef}>
       {messages.map((msg) => {
-        // --- 1. 系统通知 ---
         if (msg.type === "system_notice") {
           return (
             <div
@@ -363,9 +512,8 @@ export default function MessageList({
         const isInviteMode = msg.type === "music_invite";
         const isFocusMode =
           msg.type === "focus_invite" || msg.type === "focus_share";
+        const isStudyCardMode = msg.type === "study_card";
 
-        // --- 2. 旁白模式检测 ---
-        // 只要不是用户发的，不是特殊卡片，且包含括号，就尝试拆分
         const hasParentheses =
           msg.content &&
           /[（\(]/.test(msg.content) &&
@@ -377,24 +525,17 @@ export default function MessageList({
           (!msg.type || msg.type === "text") &&
           !isStickerMode &&
           !isInviteMode &&
-          !isFocusMode;
+          !isFocusMode &&
+          !isStudyCardMode;
 
-        // --- 3. 准备消息部分 ---
-        // 如果是旁白模式，拆分为数组；否则整个作为一个“文本”部分
         const messageParts = shouldParseNarrative
           ? splitNarrativeContent(msg.content)
           : [{ text: msg.content, isNarration: false }];
 
-        // --- 4. 渲染逻辑 (关键修改) ---
-        // 我们返回一个容器，里面可能包含多个“块”（有的居中，有的带头像）
         return (
           <div key={msg.id} className="flex flex-col gap-2 w-full mb-2">
             {messageParts.map((part, index) => {
-              // ------------------------
-              // 场景 A: 纯旁白块 (图3效果)
-              // ------------------------
               if (part.isNarration) {
-                // 去除括号用于显示（可选，如果想保留括号则去掉 .replace）
                 const displayContent = part.text.replace(/[（）()]/g, "");
                 if (!displayContent.trim()) return null;
 
@@ -403,7 +544,6 @@ export default function MessageList({
                     key={`${msg.id}-narration-${index}`}
                     className="flex justify-center w-full px-4 animate-in fade-in slide-in-from-bottom-2 duration-500"
                     onClick={() => {
-                      // 允许旁白也可以被点击进入多选模式，或者不做操作
                       if (isSelectionMode && onToggleSelection)
                         onToggleSelection(msg.id);
                     }}
@@ -417,10 +557,7 @@ export default function MessageList({
                 );
               }
 
-              // ------------------------
-              // 场景 B: 标准对话气泡 (带头像)
-              // ------------------------
-              if (!part.text.trim() && messageParts.length > 1) return null; // 过滤空行
+              if (!part.text.trim() && messageParts.length > 1) return null;
 
               let bubbleClass = isUser
                 ? "bg-[#95ec69] text-black rounded-[6px]"
@@ -430,7 +567,8 @@ export default function MessageList({
                 isStickerMode ||
                 msg.type === "image" ||
                 isInviteMode ||
-                isFocusMode
+                isFocusMode ||
+                isStudyCardMode
               ) {
                 bubbleClass = "bg-transparent shadow-none p-0 border-none";
               }
@@ -442,7 +580,6 @@ export default function MessageList({
                     isUser ? "justify-end" : "justify-start"
                   }`}
                 >
-                  {/* 多选框 */}
                   {isSelectionMode && index === 0 && (
                     <div
                       className="mr-3 shrink-0 cursor-pointer animate-in fade-in zoom-in duration-200 self-center"
@@ -460,7 +597,6 @@ export default function MessageList({
                     </div>
                   )}
 
-                  {/* 对方头像 (仅非用户显示) */}
                   {!isUser && (
                     <img
                       src={contactAvatar}
@@ -473,7 +609,6 @@ export default function MessageList({
                       isUser ? "items-end" : "items-start"
                     }`}
                   >
-                    {/* 名字 (仅第一段且非用户显示) */}
                     {!isUser &&
                       contactInfo?.name &&
                       index === 0 &&
@@ -483,7 +618,6 @@ export default function MessageList({
                         </span>
                       )}
 
-                    {/* 气泡内容 */}
                     <div
                       onContextMenu={(e) => handleContextMenu(e, msg)}
                       onClick={(e) => {
@@ -494,7 +628,9 @@ export default function MessageList({
                       }}
                       className={`relative px-3 py-2 text-[15px] leading-relaxed break-words shadow-sm select-text cursor-pointer ${bubbleClass}`}
                     >
-                      {/* --- 下面是原本的内容渲染逻辑 --- */}
+                      {isStudyCardMode && (
+                        <StudyPlanCard content={msg.content} />
+                      )}
 
                       {msg.type === "focus_invite" && (
                         <FocusCard
@@ -519,7 +655,6 @@ export default function MessageList({
                         <div className="flex flex-col items-end">
                           <div className="bg-white rounded-xl p-3 shadow-sm border border-gray-200 w-60 active:scale-95 transition-transform overflow-hidden relative">
                             <div className="flex items-start gap-3 mb-3 relative z-10">
-                              {/* Music Card UI... */}
                               <div className="w-12 h-12 bg-gray-100 rounded-md overflow-hidden shrink-0 border border-gray-100">
                                 <img
                                   src={
@@ -555,7 +690,6 @@ export default function MessageList({
                         </div>
                       )}
 
-                      {/* 图片处理 */}
                       {markdownImage && (
                         <>
                           <img
@@ -605,10 +739,10 @@ export default function MessageList({
                         />
                       )}
 
-                      {/* 普通文本渲染 (这里使用 split 后的 text) */}
                       {!isStickerMode &&
                         !isInviteMode &&
                         !isFocusMode &&
+                        !isStudyCardMode &&
                         msg.type !== "image" &&
                         msg.type !== "audio" && (
                           <RenderContentWithImages content={part.text || ""} />
@@ -638,7 +772,6 @@ export default function MessageList({
                     </div>
                   </div>
 
-                  {/* 用户头像 */}
                   {isUser && (
                     <div className="ml-2 shrink-0">
                       {myAvatar ? (
@@ -674,7 +807,6 @@ export default function MessageList({
         </div>
       )}
 
-      {/* 弹窗菜单部分保持不变 */}
       {menuVisible && selectedMsg && (
         <>
           <div
@@ -757,6 +889,7 @@ export default function MessageList({
                   selectedMsg.type !== "music_invite" &&
                   selectedMsg.type !== "focus_invite" &&
                   selectedMsg.type !== "focus_share" &&
+                  selectedMsg.type !== "study_card" &&
                   selectedMsg.type !== "system_notice" &&
                   !extractMarkdownImage(selectedMsg.content) && (
                     <MenuItem

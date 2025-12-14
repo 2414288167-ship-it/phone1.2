@@ -15,10 +15,12 @@ interface AIContextType {
     contactInfo: any,
     currentMessages: any[]
   ) => void;
+  // ✨ 修改接口定义，支持 extraData
   triggerActiveMessage: (
     conversationId: string,
     contactInfo: any,
-    type: string
+    type: string,
+    extraData?: any
   ) => void;
   getChatState: (
     conversationId: string
@@ -121,6 +123,44 @@ ${stickerListStr}
   }
 };
 
+// ✨✨✨ 终极防幻觉 Prompt：电子日程表模式 ✨✨✨
+const getTasksContext = () => {
+  if (typeof window === "undefined") return "";
+  const tasksStr = localStorage.getItem("my_focus_tasks");
+  const tasks = tasksStr ? JSON.parse(tasksStr) : [];
+  const pending = tasks.filter((t: any) => !t.done);
+
+  // 1. 构建数据部分
+  let dataPart = `[CURRENT TIME: ${new Date().toLocaleTimeString("zh-CN", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  })}]\n`;
+  if (pending.length > 0) {
+    dataPart += `[PENDING TASKS]: ${pending
+      .map((t: any) => `${t.text}${t.startTime ? `(${t.startTime})` : ""}`)
+      .join(", ")}`;
+  } else {
+    dataPart += `[PENDING TASKS]: None`;
+  }
+
+  // 2. 构建指令部分 (使用特殊标记防止 AI 忽略)
+  return `
+${dataPart}
+
+<<< SYSTEM_OVERRIDE_INSTRUCTION >>>
+You are a "Scheduler Bot" wrapped in a character persona.
+IF the user implies a plan/schedule/arrangement:
+1. Speak in character briefly (1-2 sentences).
+2. MUST APPEND the schedule using this code block:
+:::STUDY_PLAN_START:::
+- [ ] HH:MM TaskName
+- [ ] HH:MM TaskName
+:::STUDY_PLAN_END:::
+3. DO NOT output the schedule as normal text bubbles.
+4. DO NOT split the response into multiple messages. Keep it in ONE message.
+`;
+};
 const getWorldBookContent = (categoryId: string | number): string => {
   if (!categoryId || categoryId === "default") return "";
   try {
@@ -196,8 +236,10 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
       | "active_idle"
       | "active_schedule"
       | "active_batch"
-      | "continue",
-    existingMessages: any[] = []
+      | "continue"
+      | "task_reminder", // ✨ 新增类型
+    existingMessages: any[] = [],
+    extraData?: any // ✨ 新增参数
   ) => {
     const chatId = String(conversationId);
 
@@ -245,16 +287,20 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
 
       let worldBookContent = "";
       if (contactInfo.worldBookId) {
-        // 注意：ChatPage里存的是 worldBookId
         worldBookContent = getWorldBookContent(contactInfo.worldBookId);
       }
-      // 兼容旧字段
       if (!worldBookContent && contactInfo.worldBook) {
         worldBookContent = getWorldBookContent(contactInfo.worldBook);
       }
-
       if (contactInfo.customWorldBook) {
         worldBookContent += `\n${contactInfo.customWorldBook}`;
+      }
+
+      // ✨✨✨ 注入待办事项上下文 ✨✨✨
+      let tasksContent = "";
+      if (contactInfo.syncTasks) {
+        // 只有开启了同步开关才注入
+        tasksContent = getTasksContext();
       }
 
       const stickerPrompt = getStickerPrompt();
@@ -277,6 +323,17 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
       }
       if (triggerType === "continue") currentStyle = "【模式：继续说】";
 
+      // ✨✨✨ 处理任务催促模式 ✨✨✨
+      if (triggerType === "task_reminder") {
+        const taskNames = extraData?.taskNames || "某个任务";
+        const timeStr = extraData?.time || "";
+        currentStyle = `【模式：强制催促】
+现在时间是 ${timeStr}。
+系统检测到用户尚未开始以下任务：【${taskNames}】。
+请根据你的人设（如果是严格角色就严厉，如果是温柔角色就软磨硬泡），主动发消息催促用户去完成任务！
+不要只是问候，要直接切入正题。`;
+      }
+
       // --- 构建 API 消息数组 (仅历史记录) ---
       const apiMessages = currentMessages.map((m: any) => {
         let cleanContent = m.content;
@@ -292,23 +349,34 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
         return { role: m.role, content: cleanContent };
       });
 
-      // 🔥🔥🔥 核心修改：不在这里拼接 system prompt，而是传数据给后端 🔥🔥🔥
+      // 🔥🔥🔥 核心修改开始：强制注入 System 指令到队列末尾 🔥🔥🔥
+      // 这样 AI 会在生成回复前的最后一刻看到这条指令，权重最高！
+      if (contactInfo.syncTasks) {
+        const tasksContext = getTasksContext();
+        // 只有当用户最后一条消息像是要计划时，才注入强指令，或者始终注入但保持 Token 消耗
+        // 这里选择始终注入，保证稳定性
+        apiMessages.push({
+          role: "system",
+          content: tasksContext,
+        });
+        console.log("[AI核心] 已注入待办事项 System 指令到队尾");
+      }
+      // 🔥🔥🔥 核心修改结束 🔥🔥🔥
+
       const finalTemp = Number(localStorage.getItem("ai_temperature")) || 0.7;
       const finalPenalty =
         Number(localStorage.getItem("ai_presence_penalty")) || 0.0;
-      console.log("[AIContext] 准备发送请求，检查参数:", {
-        chatId,
-        hasTimeAwareness: contactInfo.timeAwareness, // 👈 检查这个！
-        hasAsideMode: contactInfo.asideMode, // 👈 检查这个！
-      });
+
+      console.log("[AIContext] 准备发送请求，TaskSync:", !!tasksContent);
+
       const fetchUrl = "/api/chat";
       const response = await fetch(fetchUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model,
-          messages: apiMessages, // 只传历史消息，system prompt 交给后端组装
-          contactInfo, // 包含 description, stylePreset 等
+          messages: apiMessages,
+          contactInfo,
           triggerType,
           // 传递动态环境数据
           dynamicContext: {
@@ -316,6 +384,7 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
             worldBookContent,
             stickerPrompt,
             currentStyle,
+            tasksContent, // ✨ 传递任务上下文
           },
           config: {
             apiKey: userApiKey,
@@ -368,28 +437,23 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (fullContent) {
-        // 🔥🔥🔥 第二步：解析暗号 & 生成专注卡片 (新增逻辑) 🔥🔥🔥
         let processedContent = fullContent;
-        let extraCardMsg: any = null;
+        const extraMsgs: any[] = [];
 
-        // 正则匹配：:::FOCUS_INVITE|25|5|4|Task:::
+        // 1. 解析专注邀请暗号
         const inviteRegex = /:::FOCUS_INVITE\|(\d+)\|(\d+)\|(\d+)\|(.*?):::/;
-        const match = fullContent.match(inviteRegex);
-
-        if (match) {
-          // 1. 从文本中移除暗号
-          processedContent = fullContent.replace(match[0], "").trim();
-
-          // 2. 提取参数
-          const [_, duration, breakTime, cycles, taskName] = match;
-
-          // 3. 构建卡片消息对象
-          extraCardMsg = {
-            id: (Date.now() + 999).toString(), // 确保ID唯一
+        const matchInvite = fullContent.match(inviteRegex);
+        if (matchInvite) {
+          processedContent = processedContent
+            .replace(matchInvite[0], "")
+            .trim();
+          const [_, duration, breakTime, cycles, taskName] = matchInvite;
+          extraMsgs.push({
+            id: (Date.now() + 999).toString(),
             role: "assistant",
-            type: "focus_invite", // 关键类型
-            content: "邀请专注", // 兼容旧版显示的文本
-            timestamp: new Date(Date.now() + 600), // 稍微晚一点的时间戳
+            type: "focus_invite",
+            content: "邀请专注",
+            timestamp: new Date(Date.now() + 600),
             status: "sent",
             extra: {
               duration: Number(duration),
@@ -397,11 +461,31 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
               cycles: Number(cycles),
               taskName: taskName,
             },
-          };
-          console.log("[AIContext] 解析到专注邀请:", extraCardMsg);
+          });
         }
 
-        // 处理图片链接 (原逻辑)
+        // ✨ 2. 解析学习计划卡片暗号 (STUDY_PLAN) ✨
+        // 格式: :::STUDY_PLAN_START::: ...内容... :::STUDY_PLAN_END:::
+        const planRegex =
+          /:::STUDY_PLAN_START:::([\s\S]*?):::STUDY_PLAN_END:::/;
+        const matchPlan = fullContent.match(planRegex);
+        if (matchPlan) {
+          // 移除原始文本中的卡片代码块，避免重复显示
+          processedContent = processedContent.replace(matchPlan[0], "").trim();
+          const planContent = matchPlan[1].trim();
+
+          extraMsgs.push({
+            id: (Date.now() + 888).toString(),
+            role: "assistant",
+            type: "study_card", // 对应 MessageList 里的新类型
+            content: planContent, // 原始 Markdown 内容
+            timestamp: new Date(Date.now() + 700),
+            status: "sent",
+          });
+          console.log("[AIContext] 解析到学习计划卡片");
+        }
+
+        // 处理图片链接
         const rawUrlRegex =
           /(?<!\]\()(https?:\/\/[^\s]+\.(?:jpeg|jpg|gif|png|webp))/gi;
         processedContent = processedContent.replace(
@@ -431,9 +515,9 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
           timestamp: new Date(Date.now() + i * 500),
         }));
 
-        // 🔥 如果有专注卡片，追加到最后
-        if (extraCardMsg) {
-          finalMsgs.push(extraCardMsg);
+        // 追加特殊卡片消息
+        if (extraMsgs.length > 0) {
+          finalMsgs.push(...extraMsgs);
         }
 
         const latestStored = localStorage.getItem(localKey);
@@ -596,8 +680,8 @@ export function AIProvider({ children }: { children: React.ReactNode }) {
           localStorage.removeItem(`ai_target_time_${id}`);
           performAIRequest(id, info, "reply", msgs);
         },
-        triggerActiveMessage: (id, info, type) =>
-          performAIRequest(id, info, type as any),
+        triggerActiveMessage: (id, info, type, extra) =>
+          performAIRequest(id, info, type as any, [], extra), // ✨ 支持传入 extra
         getChatState: (id) => chatStates[id] || "idle",
         regenerateChat,
         totalAiBubbles,

@@ -14,6 +14,8 @@ import {
   Users,
   ShoppingBag,
   Music,
+  Clock, // ✨ 新增
+  Repeat, // ✨ 新增
 } from "lucide-react";
 import { useMyTheme } from "../lib/MyTheme";
 
@@ -76,25 +78,51 @@ const ClockWidget = () => {
   );
 };
 
+// --- ✨✨✨ 重点修改：ToDoWidget ✨✨✨ ---
 const ToDoWidget = () => {
-  // 定义任务接口（要与 focus 页面一致）
+  // 1. 同步最新的任务结构
   interface Task {
     id: string;
     text: string;
     done: boolean;
     type: string;
+    completedAt?: number;
+    startTime?: string; // ✨ 新增
+    endTime?: string; // ✨ 新增
+    isDaily?: boolean; // ✨ 新增
   }
 
   const [items, setItems] = useState<Task[]>([]);
 
-  // 加载任务数据的函数
   const loadTasks = () => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("my_focus_tasks");
       if (saved) {
-        setItems(JSON.parse(saved));
+        let parsedTasks: Task[] = JSON.parse(saved);
+
+        // 2. ✨ 添加每日任务跨天重置逻辑 (与 FocusPage 保持一致)
+        // 这样即使用户先打开首页，每日任务的状态也是正确的
+        const todayStr = new Date().toDateString();
+        let hasUpdates = false;
+
+        parsedTasks = parsedTasks.map((t) => {
+          if (t.isDaily && t.done && t.completedAt) {
+            const taskDate = new Date(t.completedAt).toDateString();
+            if (taskDate !== todayStr) {
+              hasUpdates = true;
+              return { ...t, done: false, completedAt: undefined };
+            }
+          }
+          return t;
+        });
+
+        setItems(parsedTasks);
+
+        // 如果发生了重置，回写到 localStorage
+        if (hasUpdates) {
+          localStorage.setItem("my_focus_tasks", JSON.stringify(parsedTasks));
+        }
       } else {
-        // 如果没有数据，显示默认数据
         setItems([
           { id: "1", text: "保持好心情 ✨", done: false, type: "u-ni" },
         ]);
@@ -102,24 +130,26 @@ const ToDoWidget = () => {
     }
   };
 
-  // 处理任务完成/取消完成
   const toggleDone = (id: string) => {
     const newItems = items.map((item) =>
-      item.id === id ? { ...item, done: !item.done } : item
+      item.id === id
+        ? {
+            ...item,
+            done: !item.done,
+            completedAt: !item.done ? Date.now() : undefined, // ✨ 更新完成时间
+          }
+        : item
     );
     setItems(newItems);
-    // 同步回 localStorage
     localStorage.setItem("my_focus_tasks", JSON.stringify(newItems));
+    // 触发全局事件，通知 AI 和其他页面
+    window.dispatchEvent(new Event("local-storage-update"));
   };
 
   useEffect(() => {
     loadTasks();
-
-    // 监听 storage 事件（跨标签页同步）
     window.addEventListener("storage", loadTasks);
-    // 监听自定义事件（同页面/路由切换同步）
     window.addEventListener("local-storage-update", loadTasks);
-
     return () => {
       window.removeEventListener("storage", loadTasks);
       window.removeEventListener("local-storage-update", loadTasks);
@@ -139,7 +169,7 @@ const ToDoWidget = () => {
       >
         To Do List
       </Link>
-      <div className="flex-1 flex flex-col gap-3 z-10 overflow-y-auto max-h-[140px] pr-1 no-scrollbar">
+      <div className="flex-1 flex flex-col gap-2 z-10 overflow-y-auto max-h-[140px] pr-1 no-scrollbar">
         {items.length === 0 ? (
           <div className="text-xs text-gray-500 text-center py-4">
             暂无任务，点击标题添加
@@ -148,21 +178,48 @@ const ToDoWidget = () => {
           items.slice(0, 5).map((item, i) => (
             <div
               key={item.id || i}
-              className="flex items-center justify-between text-sm text-gray-700 font-medium group cursor-pointer"
+              className="flex items-start justify-between text-sm text-gray-700 font-medium group cursor-pointer hover:bg-white/30 p-1 rounded-lg transition-colors"
               onClick={() => toggleDone(item.id)}
             >
               <div
-                className={`flex items-center gap-2 transition ${
-                  item.done ? "opacity-50 line-through" : ""
+                className={`flex flex-col gap-0.5 transition flex-1 min-w-0 ${
+                  item.done ? "opacity-50" : ""
                 }`}
               >
-                <span className="text-blue-400 drop-shadow-sm text-[10px]">
-                  ●
-                </span>
-                <span className="truncate max-w-[120px]">{item.text}</span>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`text-[10px] shrink-0 ${
+                      item.done
+                        ? "text-gray-400"
+                        : "text-blue-400 drop-shadow-sm"
+                    }`}
+                  >
+                    ●
+                  </span>
+                  <span
+                    className={`truncate ${item.done ? "line-through" : ""}`}
+                  >
+                    {item.text}
+                  </span>
+                  {/* ✨ 显示每日循环图标 */}
+                  {item.isDaily && (
+                    <Repeat className="w-3 h-3 text-gray-400 shrink-0" />
+                  )}
+                </div>
+
+                {/* ✨ 显示时间范围 */}
+                {(item.startTime || item.endTime) && !item.done && (
+                  <div className="flex items-center gap-1 text-[10px] text-gray-500 ml-4 bg-white/40 w-fit px-1.5 rounded">
+                    <Clock className="w-3 h-3" />
+                    <span>
+                      {item.startTime || "..."}-{item.endTime || "..."}
+                    </span>
+                  </div>
+                )}
               </div>
+
               <div
-                className={`w-4 h-4 border-2 rounded flex items-center justify-center transition ${
+                className={`w-4 h-4 border-2 rounded flex items-center justify-center transition shrink-0 mt-0.5 ${
                   item.done
                     ? "bg-blue-400 border-blue-400"
                     : "border-gray-400/50"
@@ -310,7 +367,6 @@ export default function HomePage() {
                 className="flex flex-col items-center gap-1 group"
               >
                 <div className="w-[3.5rem] h-[3.5rem] rounded-2xl flex items-center justify-center shadow-md transition-transform group-active:scale-95 relative overflow-hidden p-1">
-                  {/* 👇👇👇 在这里修改预设图标路径 👇👇👇 */}
                   <img
                     src="\icons\博学猫.png"
                     className="w-full h-full object-contain"
@@ -407,7 +463,6 @@ export default function HomePage() {
                 className="flex flex-col items-center gap-1 group"
               >
                 <div className="w-[3.5rem] h-[3.5rem] rounded-2xl flex items-center justify-center shadow-md transition-transform group-active:scale-95 relative overflow-hidden p-1">
-                  {/* 👇👇👇 在这里修改世界书图标路径 👇👇👇 */}
                   <img
                     src="\icons\橘猫.png"
                     className="w-full h-full object-contain"
@@ -444,4 +499,3 @@ export default function HomePage() {
     </div>
   );
 }
-

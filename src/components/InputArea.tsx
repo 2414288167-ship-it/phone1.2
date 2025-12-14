@@ -125,6 +125,8 @@ interface InputAreaProps {
     imageDesc?: string
   ) => void;
   onPanelChange?: (isOpen: boolean) => void;
+  onCompositionStart?: () => void;
+  onCompositionEnd?: () => void;
 }
 
 export function InputArea({
@@ -134,6 +136,9 @@ export function InputArea({
   onSendText,
   onSendAudio,
   onPanelChange,
+  // 👇👇👇 在这里新增这两个，记得加逗号 👇👇👇
+  onCompositionStart,
+  onCompositionEnd,
 }: InputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const startY = useRef(0);
@@ -599,6 +604,9 @@ export function InputArea({
             <textarea
               ref={textareaRef}
               value={input}
+              // 👇👇👇 新增下面这两行 👇👇👇
+              onCompositionStart={onCompositionStart}
+              onCompositionEnd={onCompositionEnd}
               onChange={(e) => onInputChange(e.target.value)}
               onClick={handleInputFocus}
               onFocus={handleInputFocus}
