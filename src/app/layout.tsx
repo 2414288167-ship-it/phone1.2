@@ -5,9 +5,13 @@ import "./globals.css";
 // 引入你的所有 Provider 和根布局组件
 import { UnreadProvider } from "@/context/UnreadContext";
 import { AIProvider } from "@/context/AIContext";
-import { MusicProvider } from "@/context/MusicContext"; // 确保路径正确
-import ClientLayout from "@/components/ClientLayout"; // 确保路径正确
+import { MusicProvider } from "@/context/MusicContext";
+import ClientLayout from "@/components/ClientLayout";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
+
+// 🔥🔥🔥 核心修复：引入 MyThemeProvider 🔥🔥🔥
+// (请确保路径正确，通常是 @/lib/MyTheme 或 @/context/ThemeContext)
+import { MyThemeProvider } from "@/lib/MyTheme"; 
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -40,22 +44,24 @@ export default function RootLayout({
         <div className="flex justify-center w-full h-[100dvh] overflow-hidden bg-[#050a1f]">
           {/* 限制最大宽度 */}
           <div className="w-full max-w-[500px] h-full flex flex-col relative shadow-2xl">
+            
             {/* 
-              🔥🔥🔥 核心修复：正确的嵌套顺序 🔥🔥🔥
-              1. 先把所有的数据提供者 (Provider) 从外到内包好。
-              2. 然后把 ClientLayout 放在最内层，因为它需要使用这些数据。
-              3. 最后，把 {children} (你的页面内容) 只放一次，放在 ClientLayout 内部。
+              🔥🔥🔥 核心修复：添加 MyThemeProvider 🔥🔥🔥 
+              必须包裹在 ClientLayout 外面，最好放在最外层
             */}
-            <UnreadProvider>
-              <AIProvider>
-                <MusicProvider>
-                  <ClientLayout>
-                    {/* 👇 你的所有页面内容都将在这里渲染，并且只渲染一次 */}
-                    {children}
-                  </ClientLayout>
-                </MusicProvider>
-              </AIProvider>
-            </UnreadProvider>
+            <MyThemeProvider>
+              <UnreadProvider>
+                <AIProvider>
+                  <MusicProvider>
+                    <ClientLayout>
+                      {/* 👇 你的所有页面内容都将在这里渲染 */}
+                      {children}
+                    </ClientLayout>
+                  </MusicProvider>
+                </AIProvider>
+              </UnreadProvider>
+            </MyThemeProvider>
+            
           </div>
         </div>
       </body>
